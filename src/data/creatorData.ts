@@ -1,0 +1,130 @@
+import { InventoryItem, RoomEditorState } from '../types';
+
+export const INITIAL_INVENTORY: InventoryItem[] = [
+  {
+    id: 'inv-scene-1',
+    fileName: 'cenario_salao_escarlate.glb',
+    displayName: 'Cenário Salão Escarlate',
+    thumbUrl: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=300&q=80',
+    type: 'Sala',
+    createdAt: 'Hoje',
+    isScenario: true,
+  },
+  {
+    id: 'inv-scene-2',
+    fileName: 'cenario_loft_concreto.glb',
+    displayName: 'Cenário Loft Concreto',
+    thumbUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=300&q=80',
+    type: 'Sala',
+    createdAt: 'Hoje',
+    isScenario: true,
+  },
+  {
+    id: 'inv-sofa-1',
+    fileName: 'sofa_charcoal_3lugares.glb',
+    displayName: 'Sofá Minimalista Carvão',
+    thumbUrl: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?auto=format&fit=crop&w=300&q=80',
+    type: 'Item',
+    createdAt: 'Hoje',
+    isScenario: false,
+  },
+  {
+    id: 'inv-mesa-1',
+    fileName: 'mesa_centro_madeira.glb',
+    displayName: 'Mesa de Centro Madeira',
+    thumbUrl: 'https://images.unsplash.com/photo-1533090161767-e6ffed986c88?auto=format&fit=crop&w=300&q=80',
+    type: 'Item',
+    createdAt: 'Ontem',
+    isScenario: false,
+  },
+  {
+    id: 'inv-planta-1',
+    fileName: 'vaso_ficus_folhagem.glb',
+    displayName: 'Vaso Ficus Decor',
+    thumbUrl: 'https://images.unsplash.com/photo-1485955900006-10f4d324d411?auto=format&fit=crop&w=300&q=80',
+    type: 'Item',
+    createdAt: 'Ontem',
+    isScenario: false,
+  },
+  {
+    id: 'inv-avatar-1',
+    fileName: 'avatar_luzenne_hoodie.glb',
+    displayName: 'Avatar Luzenne Moletom',
+    thumbUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80',
+    type: 'Avatar',
+    createdAt: 'Hoje',
+    isScenario: false,
+  },
+];
+
+export const INITIAL_ROOMS: RoomEditorState[] = [
+  {
+    id: 'room-a',
+    name: 'Room A · Salão Escarlate',
+    sceneAssetId: 'inv-scene-1',
+    placedObjects: [
+      {
+        id: 'obj-sofa-1',
+        assetId: 'inv-sofa-1',
+        name: 'Sofá Carvão',
+        type: 'movel',
+        position: [0, 0.45, -0.6],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        modelType: 'sofa',
+      },
+    ],
+    spots: [
+      {
+        id: 'spot-1',
+        name: 'Pé 1',
+        type: 'pe',
+        position: [-1.2, 0.02, 1.2],
+        rotation: 0,
+      },
+      {
+        id: 'spot-2',
+        name: 'Pé 2',
+        type: 'pe',
+        position: [1.2, 0.02, 1.2],
+        rotation: 0,
+      },
+      {
+        id: 'spot-3',
+        name: 'Sofa 1',
+        type: 'sentar',
+        position: [0, 0.55, -0.6],
+        rotation: 0,
+      },
+    ],
+    boundary: {
+      x: 6.0,
+      y: 2.8,
+      z: 8.0,
+      isConfirmed: true,
+    },
+    isPublished: false,
+  },
+  {
+    id: 'room-b',
+    name: 'Room B · Loft Moderno',
+    sceneAssetId: 'inv-scene-2',
+    placedObjects: [],
+    spots: [
+      {
+        id: 'spot-b1',
+        name: 'Pé Central',
+        type: 'pe',
+        position: [0, 0.02, 0],
+        rotation: 0,
+      },
+    ],
+    boundary: {
+      x: 6.0,
+      y: 2.8,
+      z: 8.0,
+      isConfirmed: false,
+    },
+    isPublished: false,
+  },
+];

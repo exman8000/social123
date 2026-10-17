@@ -1,0 +1,6 @@
+{
+  "name": "3D Social Lounge",
+  "description": "Modo Criador 3D para edição de salas, com suporte a Supabase, upload de GLB para inventário, gizmo de transformação, spots de marcação e limite jogável 16:9.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
