@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { ArrowLeft, ArrowRight, Coins, LoaderCircle, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Coins, LoaderCircle, RefreshCw, ShoppingBag } from 'lucide-react';
 import { resolveAssetDownloadUrl } from '../lib/assetSyncClient';
 
 export interface RoomStoreProduct {
@@ -21,6 +21,7 @@ interface RoomStoreShowroom3DProps {
   isLoading: boolean;
   error: string | null;
   isAuthenticated: boolean;
+  assetAccessKey?: string | null;
   purchasingProductId: string | null;
   onPurchase: (productId: string) => Promise<void>;
   onBackToRoom: () => void;
@@ -44,6 +45,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   isLoading,
   error,
   isAuthenticated,
+  assetAccessKey,
   purchasingProductId,
   onPurchase,
   onBackToRoom,
@@ -54,16 +56,13 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   const [page, setPage] = useState(0);
   const [loadedIds, setLoadedIds] = useState<Set<string>>(() => new Set());
   const [failedIds, setFailedIds] = useState<Set<string>>(() => new Set());
+  const [retryCount, setRetryCount] = useState(0);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
-  const availableProducts = useMemo(
-    () => products.filter((product) => !failedIds.has(product.id)),
-    [failedIds, products]
-  );
   const visibleProducts = useMemo(
-    () => availableProducts.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
-    [availableProducts, page]
+    () => products.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
+    [page, products]
   );
-  const pageCount = Math.ceil(availableProducts.length / PAGE_SIZE);
+  const pageCount = Math.ceil(products.length / PAGE_SIZE);
 
   useEffect(() => {
     setPage((current) => Math.min(current, Math.max(0, pageCount - 1)));
@@ -189,6 +188,9 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     const loaded = new Set<string>();
     const failed = new Set<string>();
 
+    setLoadedIds(new Set());
+    setFailedIds(new Set());
+
     const loadProducts = async () => {
       await Promise.all(
         modelSlotsRef.current.map(async (slot, index) => {
@@ -262,12 +264,11 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
       }
     };
 
-    setLoadedIds(new Set());
     void loadProducts();
     return () => {
       cancelled = true;
     };
-  }, [visibleProducts]);
+  }, [assetAccessKey, retryCount, visibleProducts]);
 
   const handlePurchase = async (productId: string) => {
     setPurchaseError(null);
@@ -330,7 +331,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
           {error}
         </div>
       )}
-      {!isLoading && !error && availableProducts.length === 0 && (
+      {!isLoading && !error && products.length === 0 && (
         <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/10 bg-black/60 px-5 py-3 text-sm text-zinc-300">
           Nenhum item publicado com modelo 3D disponível.
         </div>
@@ -340,6 +341,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
         {visibleProducts.map((product) => {
           const isPurchasing = purchasingProductId === product.id;
           const modelLoading = !loadedIds.has(product.id);
+          const modelFailed = failedIds.has(product.id);
           const cannotAfford = coins !== null && product.price > coins;
           return (
             <article
@@ -352,21 +354,40 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
               <h3 className="mt-2 w-full truncate text-xs font-bold text-white sm:text-base" title={product.name}>
                 {product.name}
               </h3>
-              {modelLoading && !isLoading && (
+              {product.thumbUrl && (
+                <img
+                  src={product.thumbUrl}
+                  alt=""
+                  className="mt-2 h-10 w-10 rounded-lg object-cover"
+                  loading="lazy"
+                />
+              )}
+              {modelLoading && !modelFailed && !isLoading && (
                 <span className="mt-1 flex items-center gap-1 text-[9px] text-zinc-300 sm:text-[10px]">
                   <LoaderCircle className="h-3 w-3 animate-spin" />
                   Carregando modelo 3D
                 </span>
               )}
+              {modelFailed && (
+                <button
+                  type="button"
+                  onClick={() => setRetryCount((count) => count + 1)}
+                  className="mt-1 flex items-center gap-1 text-[9px] text-amber-200 hover:text-white sm:text-[10px]"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Prévia indisponível · tentar novamente
+                </button>
+              )}
               <button
                 type="button"
-                disabled={product.owned || !isAuthenticated || coins === null || cannotAfford || isPurchasing || !loadedIds.has(product.id) || isLoading || Boolean(error)}
+                disabled={product.owned || !isAuthenticated || (product.price > 0 && (coins === null || cannotAfford)) || isPurchasing || isLoading || Boolean(error)}
                 onClick={() => void handlePurchase(product.id)}
                 className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#f3c866]/40 bg-gradient-to-b from-[#d9b55e] to-[#9c7425] px-2 py-2 text-[10px] font-black text-[#17130b] shadow-lg transition enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-zinc-700 disabled:text-zinc-300 sm:mt-4 sm:gap-2 sm:px-3 sm:py-2.5 sm:text-xs"
                 title={
                   product.owned ? 'Este item já está no seu inventário' :
                     !isAuthenticated ? 'Entre na sua conta para adquirir' :
-                      cannotAfford ? 'Saldo insuficiente' : 'Adquirir item'
+                      product.price > 0 && coins === null ? 'Saldo indisponível' :
+                        cannotAfford ? 'Saldo insuficiente' : 'Adquirir item'
                 }
               >
                 {isPurchasing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Coins className="h-3.5 w-3.5" />}

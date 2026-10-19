@@ -103,6 +103,7 @@ const dedupeAvatarPoses = (poses: AvatarPoseConfig[]) => {
 
 const DEFAULT_ROOM_MOVEMENT_SETTINGS: RoomMovementSettings = {
   showSpotArrows: true,
+  clickSpotsEnabled: true,
   freeMoveEnabled: true,
   movementDuration: 2,
 };
@@ -228,6 +229,10 @@ export const App: React.FC = () => {
         typeof savedSettings.showSpotArrows === 'boolean'
           ? savedSettings.showSpotArrows
           : DEFAULT_ROOM_MOVEMENT_SETTINGS.showSpotArrows,
+      clickSpotsEnabled:
+        typeof savedSettings.clickSpotsEnabled === 'boolean'
+          ? savedSettings.clickSpotsEnabled
+          : DEFAULT_ROOM_MOVEMENT_SETTINGS.clickSpotsEnabled,
       freeMoveEnabled:
         typeof savedSettings.freeMoveEnabled === 'boolean'
           ? savedSettings.freeMoveEnabled

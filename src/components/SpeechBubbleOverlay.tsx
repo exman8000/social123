@@ -12,6 +12,7 @@ interface SpeechBubbleOverlayProps {
   avatarActions?: ObjectAction[];
   activeAvatarActionId?: string | null;
   onToggleAvatarAction?: (actionId: string) => void;
+  onFocusPlayer?: () => void;
   isShopping?: boolean;
 }
 
@@ -25,6 +26,7 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
   avatarActions = [],
   activeAvatarActionId = null,
   onToggleAvatarAction,
+  onFocusPlayer,
   isShopping = false,
 }) => {
   const [isActionsOpen, setIsActionsOpen] = React.useState(false);
@@ -114,8 +116,9 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (info.isPlayer && avatarActions.length > 0) {
-                    setIsActionsOpen((open) => !open);
+                  if (info.isPlayer) {
+                    onFocusPlayer?.();
+                    if (avatarActions.length > 0) setIsActionsOpen((open) => !open);
                   }
                 }}
                 aria-expanded={info.isPlayer && avatarActions.length > 0 ? isActionsOpen : undefined}
@@ -126,7 +129,9 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
                 }
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full backdrop-blur-md shadow-[0_6px_20px_rgba(0,0,0,0.85)] border transition-all ${
                   info.isPlayer
-                    ? `bg-gradient-to-r from-black/90 via-[#1a1710]/90 to-black/90 border-[#ffd700]/80 shadow-[0_0_14px_rgba(255,215,0,0.25)] ${avatarActions.length ? 'cursor-pointer hover:border-cyan-300' : 'cursor-default'}`
+                    ? `bg-gradient-to-r from-black/90 via-[#1a1710]/90 to-black/90 border-[#ffd700]/80 shadow-[0_0_14px_rgba(255,215,0,0.25)] cursor-pointer ${
+                        avatarActions.length ? 'hover:border-cyan-300' : 'hover:border-amber-300/60'
+                      }`
                     : 'bg-black/80 border-white/20 cursor-default'
                 }`}
               >

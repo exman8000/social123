@@ -21,11 +21,13 @@ import { getActionMotionFactor } from '../lib/actionMotion';
 
 interface LoungeCanvas3DProps {
   currentPose: AvatarPose;
+  focusAvatarRequest?: number;
   transform: AvatarTransform;
   spots: Spot[];
   currentSpotId: number;
   onSelectSpot: (spotId: number) => void;
   freeMoveEnabled?: boolean;
+  clickSpotsEnabled?: boolean;
   movementDuration?: number;
   onPlayerPositionChange?: (position: [number, number, number]) => void;
   cameraMode: 'orbit' | 'frontal' | 'closeup' | 'topdown';
@@ -44,11 +46,13 @@ interface LoungeCanvas3DProps {
 
 export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   currentPose,
+  focusAvatarRequest = 0,
   transform,
   spots,
   currentSpotId,
   onSelectSpot,
   freeMoveEnabled = false,
+  clickSpotsEnabled = true,
   movementDuration = 2,
   onPlayerPositionChange,
   cameraMode,
@@ -66,6 +70,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const playerGroupRef = useRef<THREE.Group | null>(null);
+  const currentPoseRef = useRef(currentPose);
+  currentPoseRef.current = currentPose;
   const appliedAvatarActionRef = useRef({
     position: new THREE.Vector3(),
     rotation: new THREE.Vector3(),
@@ -114,6 +120,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   currentSpotIdRef.current = currentSpotId;
   const freeMoveEnabledRef = useRef(freeMoveEnabled);
   freeMoveEnabledRef.current = freeMoveEnabled;
+  const clickSpotsEnabledRef = useRef(clickSpotsEnabled);
+  clickSpotsEnabledRef.current = clickSpotsEnabled;
   const movementDurationRef = useRef(movementDuration);
   movementDurationRef.current = movementDuration;
   const movementTargetRef = useRef<{
@@ -122,6 +130,17 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     startedAt: number;
   } | null>(null);
   const freeMoveHoldRef = useRef<THREE.Vector3 | null>(null);
+  const previousPoseOffsetsRef = useRef({
+    height: currentPose.heightOffset || 0,
+    rotation: currentPose.rotationOffset || 0,
+  });
+  const previousGizmoPositionRef = useRef<[number, number, number]>([
+    transform.positionOffset?.[0] || 0,
+    transform.positionOffset?.[1] || 0,
+    transform.positionOffset?.[2] || 0,
+  ]);
+  const previousGizmoSpotIdRef = useRef(currentSpotId);
+  const previousGizmoAngleRef = useRef(transform.angle);
   const lastPositionReportAtRef = useRef(0);
   const remotePlayersRef = useRef(remotePlayers || []);
   remotePlayersRef.current = remotePlayers || [];
@@ -150,8 +169,9 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const isDraggingRef = useRef(false);
   const isPanningRef = useRef(false);
   const previousMousePositionRef = useRef({ x: 0, y: 0 });
-  const cameraAnglesRef = useRef({ theta: 0, phi: 0.18, radius: 4.8 });
+  const cameraAnglesRef = useRef({ theta: 0, phi: 0.18, radius: 3.6 });
   const cameraTargetRef = useRef(new THREE.Vector3(0, 0.45, 0));
+  const cameraFollowOffsetRef = useRef(new THREE.Vector3(0, 0.45, 0));
 
   useEffect(() => {
     const container = mountRef.current;
@@ -293,20 +313,18 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     defaultArchitectureGroup.add(rug);
 
     // If editorRoom has a custom 3D scenario uploaded/set, load it and hide default walls!
-    const sceneAssetUuid = extractAssetUuid(
-      editorRoom?.sceneAssetId ||
-      (editorRoom as any)?.assetId ||
-      editorRoom?.sceneAssetBlobUrl
-    );
+    const sceneAssetUuid =
+      extractAssetUuid(editorRoom?.sceneAssetId || editorRoom?.sceneAssetBlobUrl) ||
+      extractAssetUuid(editorRoom?.placedObjects?.find((object) => object.type === 'cenario'));
 
     if (sceneAssetUuid || (editorRoom?.sceneAssetBlobUrl && !editorRoom.sceneAssetBlobUrl.startsWith('blob:'))) {
-      defaultArchitectureGroup.visible = false;
       const scenarioLoader = new GLTFLoader();
 
       const loadScenarioGlb = (loadUrl: string) => {
         scenarioLoader.load(
           loadUrl,
           (gltf) => {
+            defaultArchitectureGroup.visible = false;
             const model = gltf.scene;
             const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
@@ -365,8 +383,6 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       defaultArchitectureGroup.visible = false;
       const loft = createLoftArchitecture();
       scene.add(loft);
-    } else if (editorRoom?.isMissingAsset) {
-      defaultArchitectureGroup.visible = false;
     }
 
     // Spot Meshes: Glowing circles (círculos brilhantes) + discreet blinking down-arrow
@@ -536,6 +552,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           return;
         }
 
+        const objAssetUuid = extractAssetUuid(obj.assetId || (obj as any).originalItemId || obj.fileBlobUrl);
+        if (obj.type === 'cenario' && sceneAssetUuid && objAssetUuid === sceneAssetUuid) {
+          return;
+        }
+
         // If this object is designated as the player's custom avatar, skip rendering it as a static room prop!
         if (customAvatarObject && obj.id === customAvatarObject.id) {
           return;
@@ -545,8 +566,6 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         objGroup.position.set(obj.position[0], obj.position[1], obj.position[2]);
         objGroup.rotation.set(obj.rotation[0], obj.rotation[1], obj.rotation[2]);
         objGroup.scale.set(obj.scale[0], obj.scale[1], obj.scale[2]);
-
-        const objAssetUuid = extractAssetUuid(obj.assetId || (obj as any).originalItemId || obj.fileBlobUrl);
 
         if (obj.isMissingAsset || (!objAssetUuid && !obj.fileBlobUrl)) return;
 
@@ -658,6 +677,10 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       // Smooth camera orbit positioning
       if (cameraRef.current) {
         const cam = cameraRef.current;
+        if (player) {
+          const followTarget = player.position.clone().add(cameraFollowOffsetRef.current);
+          cameraTargetRef.current.lerp(followTarget, 0.08);
+        }
         let targetRadius = cameraAnglesRef.current.radius;
         let targetPhi = cameraAnglesRef.current.phi;
         let targetTheta = cameraAnglesRef.current.theta;
@@ -806,14 +829,14 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 
           playerGroupRef.current.position.set(
             activeSpot.position[0] + offX + worldX,
-            activeSpot.position[1] + (currentPose.heightOffset || 0) + offY + posY,
+            activeSpot.position[1] + (currentPoseRef.current.heightOffset || 0) + offY + posY,
             activeSpot.position[2] + offZ + worldZ
           );
 
           const totalAngleDeg =
             activeSpot.rotation +
             transformRef.current.angle +
-            (currentPose.rotationOffset || 0) +
+            (currentPoseRef.current.rotationOffset || 0) +
             ryDeg;
           playerGroupRef.current.rotation.y = THREE.MathUtils.degToRad(totalAngleDeg);
         } else if (playerGroupRef.current) {
@@ -824,7 +847,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             const offY = transformRef.current.positionOffset?.[1] || 0;
             const offZ = transformRef.current.positionOffset?.[2] || 0;
             const targetX = activeSpot.position[0] + offX;
-            const targetY = activeSpot.position[1] + (currentPose.heightOffset || 0) + offY;
+            const targetY = activeSpot.position[1] + (currentPoseRef.current.heightOffset || 0) + offY;
             const targetZ = activeSpot.position[2] + offZ;
             if (
               Math.abs(playerGroupRef.current.position.x - targetX) > 0.001 ||
@@ -835,7 +858,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               const totalAngleDeg =
                 activeSpot.rotation +
                 transformRef.current.angle +
-                (currentPose.rotationOffset || 0);
+                (currentPoseRef.current.rotationOffset || 0);
               playerGroupRef.current.rotation.y = THREE.MathUtils.degToRad(totalAngleDeg);
             }
           }
@@ -1057,8 +1080,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
         const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
 
-        cameraTargetRef.current.addScaledVector(right, -deltaX * factor);
-        cameraTargetRef.current.addScaledVector(up, deltaY * factor);
+        cameraFollowOffsetRef.current.addScaledVector(right, -deltaX * factor);
+        cameraFollowOffsetRef.current.addScaledVector(up, deltaY * factor);
         return;
       }
 
@@ -1089,6 +1112,70 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         );
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, cameraRef.current);
+        const intersects = raycaster.intersectObjects(
+          spotClickablesGroupRef.current.children,
+          true
+        );
+        let clickedSpot: Spot | undefined;
+        if (clickSpotsEnabledRef.current && intersects.length > 0) {
+          let hitObject: THREE.Object3D | null = intersects[0].object;
+          while (
+            hitObject &&
+            (hitObject as any).userData?.spotId === undefined &&
+            hitObject.parent
+          ) {
+            hitObject = hitObject.parent;
+          }
+          const clickedSpotId = (hitObject as any)?.userData?.spotId;
+          clickedSpot = spots.find(
+            (spot) =>
+              spot.id === clickedSpotId || String(spot.id) === String(clickedSpotId)
+          );
+        }
+
+        if (clickedSpot) {
+          const player = playerGroupRef.current;
+          if (freeMoveEnabledRef.current && player) {
+            const offset = transformRef.current.positionOffset;
+            const target = new THREE.Vector3(
+              clickedSpot.position[0] + (offset?.[0] || 0),
+              clickedSpot.position[1] +
+                (currentPoseRef.current.heightOffset || 0) +
+                (offset?.[1] || 0),
+              clickedSpot.position[2] + (offset?.[2] || 0)
+            );
+            movementTargetRef.current = {
+              from: player.position.clone(),
+              to: target,
+              startedAt: performance.now(),
+            };
+            freeMoveHoldRef.current = target.clone();
+            onSelectSpotRef.current(clickedSpot.id);
+          } else if (clickedSpot.id === currentSpotIdRef.current) {
+            const hitPoint = intersects[0].point;
+            const offX = hitPoint.x - clickedSpot.position[0];
+            const offZ = hitPoint.z - clickedSpot.position[2];
+            const maxRadius =
+              (clickedSpot as any)?.relativeRadius ||
+              (clickedSpot as any)?.radius ||
+              spotVisualConfigRef.current?.relativeSpotRadius ||
+              0.45;
+            const distance = Math.hypot(offX, offZ);
+            const ratio = distance > maxRadius && distance > 0 ? maxRadius / distance : 1;
+            onChangeTransformRef.current?.({
+              ...transformRef.current,
+              positionOffset: [
+                parseFloat((offX * ratio).toFixed(2)),
+                transformRef.current.positionOffset?.[1] || 0,
+                parseFloat((offZ * ratio).toFixed(2)),
+              ],
+            });
+          } else {
+            onSelectSpotRef.current(clickedSpot.id);
+          }
+          return;
+        }
+
         if (freeMoveEnabledRef.current && playerGroupRef.current) {
           const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
           const floorPoint = new THREE.Vector3();
@@ -1142,65 +1229,6 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             };
             freeMoveHoldRef.current = target.clone();
             return;
-          }
-        }
-        const intersects = raycaster.intersectObjects(
-          spotClickablesGroupRef.current.children,
-          true
-        );
-        if (intersects.length > 0) {
-          const hitPoint = intersects[0].point;
-          // Disambiguate when spots overlap: pick the spot whose center is closest to the hit point
-          let bestSpot = spots[0];
-          let bestDistSq = Infinity;
-          for (const s of spots) {
-            const dx = s.position[0] - hitPoint.x;
-            const dz = s.position[2] - hitPoint.z;
-            const distSq = dx * dx + dz * dz;
-            if (distSq < bestDistSq) {
-              bestDistSq = distSq;
-              bestSpot = s;
-            }
-          }
-          if (bestSpot) {
-            if (bestSpot.id === currentSpotIdRef.current) {
-              // Click inside active spot: fine-tune avatar position within spot radius
-              const offX = hitPoint.x - bestSpot.position[0];
-              const offZ = hitPoint.z - bestSpot.position[2];
-              const maxRadius =
-                (bestSpot as any)?.relativeRadius ||
-                (bestSpot as any)?.radius ||
-                spotVisualConfigRef.current?.relativeSpotRadius ||
-                0.45;
-              const d = Math.hypot(offX, offZ);
-              let clampedX = offX;
-              let clampedZ = offZ;
-              if (d > maxRadius && d > 0) {
-                clampedX = (offX / d) * maxRadius;
-                clampedZ = (offZ / d) * maxRadius;
-              }
-              if (onChangeTransformRef.current) {
-                onChangeTransformRef.current({
-                  ...transformRef.current,
-                  positionOffset: [
-                    parseFloat(clampedX.toFixed(2)),
-                    transformRef.current.positionOffset?.[1] || 0,
-                    parseFloat(clampedZ.toFixed(2)),
-                  ],
-                });
-              }
-            } else {
-              onSelectSpotRef.current(bestSpot.id);
-            }
-          } else {
-            let hitObj: THREE.Object3D | null = intersects[0].object;
-            while (hitObj && (hitObj as any).userData?.spotId === undefined && hitObj.parent) {
-              hitObj = hitObj.parent;
-            }
-            if (hitObj && (hitObj as any).userData?.spotId !== undefined) {
-              const clickedSpotId = (hitObj as any).userData.spotId;
-              onSelectSpotRef.current(clickedSpotId);
-            }
           }
         }
       }
@@ -1296,6 +1324,14 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (!focusAvatarRequest) return;
+    cameraAnglesRef.current.radius = 3.4;
+    cameraAnglesRef.current.phi = 0.12;
+    cameraAnglesRef.current.theta = 0;
+    cameraFollowOffsetRef.current.set(0, 0.45, 0);
+  }, [focusAvatarRequest]);
+
   const placedObjectsKey = (editorRoom?.placedObjects || [])
     .map((object) => [
       object.id,
@@ -1306,6 +1342,9 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       object.isMissingAsset ? 'missing' : '',
     ].join(':'))
     .join('|');
+  const sceneAssetUuid =
+    extractAssetUuid(editorRoom?.sceneAssetId || editorRoom?.sceneAssetBlobUrl) ||
+    extractAssetUuid(editorRoom?.placedObjects?.find((object) => object.type === 'cenario'));
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -1315,6 +1354,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       (editorRoom?.placedObjects || [])
         .filter((object) =>
           !((object.type === 'pose' || object.isPose) && object.attachedAvatarIds?.length) &&
+          !(object.type === 'cenario' && sceneAssetUuid &&
+            extractAssetUuid(object.assetId || object.fileBlobUrl) === sceneAssetUuid) &&
           !(customAvatarObject && object.id === customAvatarObject.id)
         )
         .map((object) => [object.id, object])
@@ -1392,7 +1433,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       }
     });
 
-  }, [customAvatarObject?.id, editorRoom?.id, placedObjectsKey]);
+  }, [customAvatarObject?.id, editorRoom?.id, placedObjectsKey, sceneAssetUuid]);
 
   // Update Remote Players 3D Meshes & Floating Display Names
   useEffect(() => {
@@ -1511,6 +1552,28 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   useEffect(() => {
     if (!playerGroupRef.current) return;
     const player = playerGroupRef.current;
+    const previous = previousPoseOffsetsRef.current;
+    const heightOffset = currentPose.heightOffset || 0;
+    const rotationOffset = currentPose.rotationOffset || 0;
+    const heightDelta = heightOffset - previous.height;
+    const rotationDelta = rotationOffset - previous.rotation;
+    previousPoseOffsetsRef.current = { height: heightOffset, rotation: rotationOffset };
+    if (heightDelta !== 0) {
+      player.position.y += heightDelta;
+      if (freeMoveHoldRef.current) freeMoveHoldRef.current.y += heightDelta;
+      if (movementTargetRef.current) {
+        movementTargetRef.current.from.y += heightDelta;
+        movementTargetRef.current.to.y += heightDelta;
+      }
+    }
+    if (rotationDelta !== 0) {
+      player.rotation.y += THREE.MathUtils.degToRad(rotationDelta);
+    }
+  }, [currentPose.heightOffset, currentPose.rotationOffset]);
+
+  useEffect(() => {
+    if (!playerGroupRef.current) return;
+    const player = playerGroupRef.current;
 
     // Spot position & max radius clamping
     const activeSpot = spots.find((s) => s.id === currentSpotId) || spots[1];
@@ -1547,14 +1610,45 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     }
     const offY = transform.positionOffset?.[1] || 0;
 
-    player.position.set(
-      activeSpot.position[0] + offX,
-      activeSpot.position[1] + (currentPose.heightOffset || 0) + offY,
-      activeSpot.position[2] + offZ
-    );
+    const previousPositionOffset = previousGizmoPositionRef.current;
+    const positionDelta = [
+      (transform.positionOffset?.[0] || 0) - previousPositionOffset[0],
+      (transform.positionOffset?.[1] || 0) - previousPositionOffset[1],
+      (transform.positionOffset?.[2] || 0) - previousPositionOffset[2],
+    ];
+    const spotChanged = previousGizmoSpotIdRef.current !== currentSpotId;
+    const angleChanged = previousGizmoAngleRef.current !== transform.angle;
+    previousGizmoPositionRef.current = [
+      transform.positionOffset?.[0] || 0,
+      transform.positionOffset?.[1] || 0,
+      transform.positionOffset?.[2] || 0,
+    ];
+    previousGizmoSpotIdRef.current = currentSpotId;
+    previousGizmoAngleRef.current = transform.angle;
+
     if (freeMoveEnabledRef.current) {
-      movementTargetRef.current = null;
+      if (spotChanged && !movementTargetRef.current) {
+        player.position.set(
+          activeSpot.position[0] + offX,
+          activeSpot.position[1] + (currentPose.heightOffset || 0) + offY,
+          activeSpot.position[2] + offZ
+        );
+      } else if (positionDelta.some((delta) => delta !== 0)) {
+        const delta = new THREE.Vector3(...positionDelta);
+        player.position.add(delta);
+        if (movementTargetRef.current) {
+          movementTargetRef.current.from.add(delta);
+          movementTargetRef.current.to.add(delta);
+        }
+        if (freeMoveHoldRef.current) freeMoveHoldRef.current.add(delta);
+      }
       freeMoveHoldRef.current = player.position.clone();
+    } else {
+      player.position.set(
+        activeSpot.position[0] + offX,
+        activeSpot.position[1] + (currentPose.heightOffset || 0) + offY,
+        activeSpot.position[2] + offZ
+      );
     }
 
     // Transform from Gizmo (Scale, SizeY, Angle)
@@ -1565,9 +1659,19 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     );
 
     // Rotation: spot base angle + gizmo angle + pose angle offset
-    const totalAngleDeg = activeSpot.rotation + transform.angle + (currentPose.rotationOffset || 0);
-    player.rotation.y = THREE.MathUtils.degToRad(totalAngleDeg);
-  }, [transform, currentPose, currentSpotId, spots]);
+    if (!freeMoveEnabledRef.current || spotChanged || angleChanged) {
+      const totalAngleDeg =
+        activeSpot.rotation + transform.angle + (currentPose.rotationOffset || 0);
+      player.rotation.y = THREE.MathUtils.degToRad(totalAngleDeg);
+    }
+  }, [
+    transform.positionOffset?.[0],
+    transform.positionOffset?.[1],
+    transform.positionOffset?.[2],
+    transform.angle,
+    currentSpotId,
+    spots,
+  ]);
 
   // Synchronize Player Avatar 3D Model and Posture dynamically whenever activeUserAvatar, currentPose, customAvatarObject, or equippedAccessories changes
   useEffect(() => {

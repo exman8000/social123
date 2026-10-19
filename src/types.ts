@@ -214,6 +214,7 @@ export interface AvatarTransform {
 
 export interface RoomMovementSettings {
   showSpotArrows: boolean;
+  clickSpotsEnabled: boolean;
   freeMoveEnabled: boolean;
   movementDuration: number;
 }

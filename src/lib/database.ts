@@ -110,17 +110,24 @@ export async function persistShowcaseRoom(
     options?.thumbnailUrl ||
     'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80';
 
-  const sceneAssetId = extractAssetUuid(room.sceneAssetId || room.sceneAssetBlobUrl);
+  const sceneAssetId =
+    extractAssetUuid(room.sceneAssetId || room.sceneAssetBlobUrl) ||
+    extractAssetUuid(room.placedObjects?.find((obj) => obj.type === 'cenario'));
 
   // Sanitize placed_objects: extract assetId UUID and strip transient fileBlobUrl
-  const cleanedPlacedObjects: PlacedObject[] = (room.placedObjects || []).map((obj) => {
-    const objAssetUuid = extractAssetUuid(obj.assetId || obj.fileBlobUrl);
-    return {
-      ...obj,
-      assetId: objAssetUuid || obj.assetId,
-      fileBlobUrl: undefined, // URLs são resolvidas sob demanda via /resolve
-    };
-  });
+  const cleanedPlacedObjects: PlacedObject[] = (room.placedObjects || [])
+    .filter((obj) => {
+      const objAssetUuid = extractAssetUuid(obj.assetId || obj.fileBlobUrl);
+      return !(obj.type === 'cenario' && sceneAssetId && objAssetUuid === sceneAssetId);
+    })
+    .map((obj) => {
+      const objAssetUuid = extractAssetUuid(obj.assetId || obj.fileBlobUrl);
+      return {
+        ...obj,
+        assetId: objAssetUuid || obj.assetId,
+        fileBlobUrl: undefined, // URLs são resolvidas sob demanda via /resolve
+      };
+    });
 
   const finalRadioUrl = options?.radioUrl || room.radioUrl || 'https://music.poprockenlinea.com/listen/poprock/radio.mp3';
   const finalPlaylist = options?.playlist || room.playlist || [];
@@ -567,15 +574,20 @@ export async function fetchPublicShowcaseRooms(): Promise<any[]> {
         }
 
         // Sanitize placed_objects: strip old signed URLs / blob:
-        const cleanedPlacedObjects = (row.placed_objects || []).map((obj: any) => {
-          const objAssetUuid = extractAssetUuid(obj);
-          return {
-            ...obj,
-            assetId: objAssetUuid || obj.assetId,
-            fileBlobUrl: undefined, // dynamically resolved via /resolve
-            isMissingAsset: !objAssetUuid,
-          };
-        });
+        const cleanedPlacedObjects = (row.placed_objects || [])
+          .filter((obj: any) => {
+            const objAssetUuid = extractAssetUuid(obj);
+            return !(obj.type === 'cenario' && extractedSceneUuid && objAssetUuid === extractedSceneUuid);
+          })
+          .map((obj: any) => {
+            const objAssetUuid = extractAssetUuid(obj);
+            return {
+              ...obj,
+              assetId: objAssetUuid || obj.assetId,
+              fileBlobUrl: undefined, // dynamically resolved via /resolve
+              isMissingAsset: !objAssetUuid,
+            };
+          });
 
         const isPresetArchitecture =
           !extractedSceneUuid &&

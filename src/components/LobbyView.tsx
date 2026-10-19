@@ -17,6 +17,8 @@ import {
   ChevronRight,
   Settings,
   X,
+  Store,
+  Package,
 } from 'lucide-react';
 import { RoomData, CreatorUser, RoomMovementSettings } from '../types';
 import { toggleRoomLike } from '../lib/database';
@@ -180,19 +182,27 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             <span className="text-xs font-bold text-purple-200">180</span>
           </div>
 
-          {/* BOTÃO LOJA & PERSONALIZAR AVATAR (DESTAQUE NO TOPO DA VITRINE) */}
+          {/* Quick access to the 3D store and account inventory */}
           <button
-            id="lobby-customization-btn"
+            id="lobby-store-btn"
             type="button"
-            onClick={() => {
-              if (onOpenCustomization) onOpenCustomization();
-              else if (onOpenShop) onOpenShop();
-            }}
-            className="flex items-center gap-2 px-4 py-1.5 rounded-xl bg-gradient-to-r from-[#d4af37] to-[#ffd700] hover:from-[#e5bd38] hover:to-[#ffe033] text-black text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(255,215,0,0.45)] transition-all cursor-pointer active:scale-95 border border-[#ffd700]"
-            title="Abrir Loja de Roupas, Avatares e Poses (Personalização 3D)"
+            onClick={onOpenShop}
+            className="flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-[#d4af37] to-[#ffd700] hover:from-[#e5bd38] hover:to-[#ffe033] text-black text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(255,215,0,0.45)] transition-all cursor-pointer active:scale-95 border border-[#ffd700]"
+            title="Abrir Loja 3D"
           >
-            <ShoppingBag className="w-4 h-4 text-black stroke-[2.5]" />
-            <span className="font-extrabold tracking-wide">LOJA & PERSONALIZAR</span>
+            <Store className="w-4 h-4 text-black stroke-[2.5]" />
+            <span className="hidden sm:inline font-extrabold tracking-wide">LOJA 3D</span>
+          </button>
+          <button
+            id="lobby-inventory-btn"
+            type="button"
+            onClick={onOpenCustomization || onOpenShop}
+            className="flex items-center gap-2 rounded-xl border border-white/20 bg-black/50 px-3 py-1.5 text-xs font-bold text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-amber-300/50 hover:text-amber-100 active:scale-95"
+            title="Abrir Inventário"
+            aria-label="Abrir Inventário"
+          >
+            <Package className="h-4 w-4" />
+            <span className="hidden sm:inline">Inventário</span>
           </button>
 
           {/* LOGIN / CADASTRO ICON BUTTON: "inserri icone d elogin / cadstro na vitrine do usuario" */}
@@ -614,6 +624,24 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                   onMovementSettingsChange({
                     ...movementSettings,
                     showSpotArrows: event.target.checked,
+                  })
+                }
+                className="h-4 w-4 accent-amber-400"
+              />
+            </label>
+
+            <label className="mb-4 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3">
+              <span>
+                <span className="block text-sm font-semibold">Clique nos spots</span>
+                <span className="block text-xs text-zinc-400">Permite escolher um lugar clicando no marcador.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={movementSettings.clickSpotsEnabled}
+                onChange={(event) =>
+                  onMovementSettingsChange({
+                    ...movementSettings,
+                    clickSpotsEnabled: event.target.checked,
                   })
                 }
                 className="h-4 w-4 accent-amber-400"

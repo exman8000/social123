@@ -320,7 +320,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
     }
     return 2;
   }); // Center puff is Player
-  const { freeMoveEnabled, movementDuration, showSpotArrows } = movementSettings;
+  const [avatarFocusRequest, setAvatarFocusRequest] = useState(0);
+  const { freeMoveEnabled, movementDuration, showSpotArrows, clickSpotsEnabled } = movementSettings;
   const cameraMode = 'orbit' as const;
 
   // Chat & Speech Bubbles State
@@ -693,11 +694,13 @@ export const RoomView: React.FC<RoomViewProps> = ({
       <div className={`absolute inset-0 z-0 transition-opacity duration-200 ${isStoreOpen ? 'pointer-events-none opacity-0' : 'opacity-100'}`}>
         <LoungeCanvas3D
           currentPose={selectedPose}
+          focusAvatarRequest={avatarFocusRequest}
           transform={transform}
           spots={spots}
           currentSpotId={currentSpotId}
           onSelectSpot={setCurrentSpotId}
           freeMoveEnabled={freeMoveEnabled}
+          clickSpotsEnabled={clickSpotsEnabled}
           movementDuration={movementDuration}
           onPlayerPositionChange={setPlayerPosition}
           cameraMode={cameraMode}
@@ -729,6 +732,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
         avatarActions={avatarActions}
         activeAvatarActionId={activeAvatarActionId}
         onToggleAvatarAction={handleToggleAvatarAction}
+        onFocusPlayer={() => setAvatarFocusRequest((request) => request + 1)}
         isShopping={isShopping}
       />
 
@@ -933,6 +937,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
           isLoading={storeLoading}
           error={storeError}
           isAuthenticated={Boolean(user && !user.isGuest)}
+          assetAccessKey={user?.id || null}
           purchasingProductId={purchasingProductId}
           onPurchase={handlePurchaseStoreItem}
           onBackToRoom={handleReturnToRoom}
