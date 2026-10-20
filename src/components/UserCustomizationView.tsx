@@ -54,6 +54,7 @@ interface UserCustomizationViewProps {
   user: CreatorUser | null;
   onOpenAuthModal: () => void;
   initialTab?: 'loja' | 'inventario' | 'poses';
+  hideStoreTab?: boolean;
   userInventory: InventoryItem[];
   customizationItems: CustomizationItem[];
   storeAvatars: StoreAvatar[];
@@ -93,6 +94,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   user,
   onOpenAuthModal,
   initialTab = 'inventario',
+  hideStoreTab = false,
   userInventory,
   customizationItems,
   storeAvatars,
@@ -122,7 +124,9 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   onStoreAvatarPreviewed,
 }: UserCustomizationViewProps) => {
   // Navigation Tabs: 'loja' | 'inventario' | 'poses'
-  const [activeTab, setActiveTab] = useState<'loja' | 'inventario' | 'poses'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'loja' | 'inventario' | 'poses'>(
+    hideStoreTab && initialTab === 'loja' ? 'inventario' : initialTab
+  );
   const [isPedestalFocusMode, setIsPedestalFocusMode] = useState(false);
 
   // Cart state
@@ -1052,24 +1056,26 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
 
         {/* Center: Main Navigation Tabs (Loja | Inventário | Poses) */}
         <nav className="flex items-center gap-8 text-sm font-medium tracking-wide">
-          <button
-            type="button"
-            onClick={() => {
-              setIsPedestalFocusMode(false);
-              setActiveTab('loja');
-              setSelectedItemToInspect(null);
-            }}
-            className={`relative py-5 transition-colors cursor-pointer ${
-              activeTab === 'loja'
-                ? 'text-zinc-100 font-semibold'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            Loja
-            {activeTab === 'loja' && (
-              <span className="absolute bottom-0 inset-x-0 h-0.5 bg-[#d4af37] shadow-[0_0_8px_#d4af37]" />
-            )}
-          </button>
+          {!hideStoreTab && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsPedestalFocusMode(false);
+                setActiveTab('loja');
+                setSelectedItemToInspect(null);
+              }}
+              className={`relative py-5 transition-colors cursor-pointer ${
+                activeTab === 'loja'
+                  ? 'text-zinc-100 font-semibold'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Loja
+              {activeTab === 'loja' && (
+                <span className="absolute bottom-0 inset-x-0 h-0.5 bg-[#d4af37] shadow-[0_0_8px_#d4af37]" />
+              )}
+            </button>
+          )}
 
           <button
             type="button"

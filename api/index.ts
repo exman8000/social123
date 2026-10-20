@@ -8,7 +8,6 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../src/lib/supabase';
 
 // Sanitiza mensagens de erro removendo senhas e secrets
 export function sanitizeErrorMessage(err: unknown): string {
@@ -200,15 +199,22 @@ const storageService = {
   },
 };
 
-const authClient = createClient(
-  process.env.SUPABASE_URL?.trim() ||
-    process.env.VITE_SUPABASE_URL?.trim() ||
-    SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY?.trim() ||
-    process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
-    SUPABASE_ANON_KEY,
-  { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }
-);
+let authClient: ReturnType<typeof createClient> | null = null;
+
+function getAuthClient(): ReturnType<typeof createClient> | null {
+  if (authClient) return authClient;
+  const url =
+    process.env.SUPABASE_URL?.trim() || process.env.VITE_SUPABASE_URL?.trim();
+  const anonKey =
+    process.env.SUPABASE_ANON_KEY?.trim() ||
+    process.env.VITE_SUPABASE_ANON_KEY?.trim();
+  if (!url || !anonKey) return null;
+
+  authClient = createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  return authClient;
+}
 
 async function getUserIdFromRequest(req: Request): Promise<string | null> {
   const authHeader = req.headers.authorization;
@@ -216,7 +222,9 @@ async function getUserIdFromRequest(req: Request): Promise<string | null> {
   const token = authHeader.slice(7).trim();
   if (!token) return null;
 
-  const { data, error } = await authClient.auth.getUser(token);
+  const client = getAuthClient();
+  if (!client) return null;
+  const { data, error } = await client.auth.getUser(token);
   if (error || !data.user) return null;
 
   const requestedUserId = req.headers['x-user-id'];

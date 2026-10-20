@@ -101,6 +101,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
   const [remotePlayers, setRemotePlayers] = useState<any[]>([]);
   const [playerPosition, setPlayerPosition] = useState<[number, number, number] | null>(null);
   const roomChannelRef = React.useRef<any>(null);
+  const roomChannelReadyRef = React.useRef(false);
+  const pendingChatMessagesRef = React.useRef<ChatMessage[]>([]);
+  const seenChatMessageIdsRef = React.useRef(new Set<string>());
 
   // Gizmo & Transform State (Mover -> Escala -> Rotação)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('mover');
@@ -502,8 +505,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
   // Send message from chat
   const handleSendMessage = (text: string) => {
     const senderName = user?.displayName || 'Você';
+    const messageId = `${tabSessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const newMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
+      id: messageId,
       user: `${senderName}`,
       avatarUrl: liveAvatar?.thumb,
       text,
@@ -512,23 +516,25 @@ export const RoomView: React.FC<RoomViewProps> = ({
       isPlayer: true,
     };
 
+    seenChatMessageIdsRef.current.add(messageId);
     setChatMessages((prev) => [...prev, newMsg]);
 
-    if (roomChannelRef.current) {
-      roomChannelRef.current.send({
+    if (roomChannelRef.current && roomChannelReadyRef.current) {
+      const channel = roomChannelRef.current;
+      const broadcast = channel.send({
         type: 'broadcast',
         event: 'chat',
-        payload: {
-          id: `msg-${Date.now()}`,
-          user: senderName,
-          senderSessionId: tabSessionId,
-          avatarUrl: liveAvatar?.thumb,
-          text,
-          time: 'agora',
-          spotId: currentSpotId,
-          isPlayer: false,
-        },
+        payload: { ...newMsg, senderSessionId: tabSessionId, isPlayer: false },
       });
+      void broadcast.then((status: string) => {
+        if (status !== 'ok' && roomChannelRef.current === channel) {
+          pendingChatMessagesRef.current.push(newMsg);
+        }
+      }).catch(() => {
+        if (roomChannelRef.current === channel) pendingChatMessagesRef.current.push(newMsg);
+      });
+    } else {
+      pendingChatMessagesRef.current.push(newMsg);
     }
 
     // Spawn 3D speech bubble above player's head
@@ -562,6 +568,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
     const myDisplayName = user?.displayName || 'Visitante';
     const presenceKey = `${tabSessionId}`;
+    pendingChatMessagesRef.current = [];
 
     const channel = supabase.channel(`room-presence:${effectiveRoomId}`, {
       config: {
@@ -570,6 +577,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
     });
 
     roomChannelRef.current = channel;
+    roomChannelReadyRef.current = false;
 
     channel
       .on('presence', { event: 'sync' }, () => {
@@ -587,6 +595,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
                 spotId: latest.spotId || 1,
                 position: Array.isArray(latest.position) ? latest.position : undefined,
                 avatar: latest.avatar || null,
+                customAvatarAssetId: latest.customAvatarAssetId || null,
+                customAvatarUrl: latest.customAvatarUrl || null,
                 pose: latest.pose || null,
                 activity: latest.activity === 'shopping' ? 'shopping' : 'room',
               });
@@ -597,16 +607,35 @@ export const RoomView: React.FC<RoomViewProps> = ({
         setRemotePlayers(playersList);
       })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
-        if (payload && payload.senderSessionId !== tabSessionId) {
-          setChatMessages((prev) => [...prev, payload]);
-          if (payload.text) {
+        if (
+          payload &&
+          payload.senderSessionId !== tabSessionId &&
+          typeof payload.id === 'string' &&
+          typeof payload.text === 'string' &&
+          typeof payload.user === 'string' &&
+          !seenChatMessageIdsRef.current.has(payload.id)
+        ) {
+          seenChatMessageIdsRef.current.add(payload.id);
+          const message: ChatMessage = {
+            id: payload.id,
+            user: payload.user,
+            avatarUrl: typeof payload.avatarUrl === 'string' ? payload.avatarUrl : undefined,
+            text: payload.text,
+            time: typeof payload.time === 'string' ? payload.time : 'agora',
+            spotId: Number.isFinite(Number(payload.spotId)) ? Number(payload.spotId) : 1,
+            isPlayer: false,
+          };
+          setChatMessages((prev) =>
+            prev.some((current) => current.id === message.id) ? prev : [...prev, message]
+          );
+          if (message.text) {
             setSpeechBubbles((prev) => [
               ...prev,
               {
-                id: `bubble-remote-${Date.now()}`,
-                text: payload.text,
-                spotId: payload.spotId || 1,
-                userName: payload.user || 'Usuário',
+                id: `bubble-${message.id}`,
+                text: message.text,
+                spotId: message.spotId,
+                userName: message.user || 'Usuário',
                 createdAt: Date.now(),
               },
             ]);
@@ -614,21 +643,70 @@ export const RoomView: React.FC<RoomViewProps> = ({
         }
       })
       .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          const initialSpot = spots.find((spot) => spot.id === currentSpotId) || spots[0];
-          await channel.track({
-            sessionId: tabSessionId,
-            displayName: myDisplayName,
-            spotId: currentSpotId,
-            position: playerPosition || initialSpot?.position,
-            avatar: liveAvatar,
-            pose: selectedPose,
-            activity: isShopping ? 'shopping' : 'room',
-          });
+        if (roomChannelRef.current !== channel) return;
+        if (status !== 'SUBSCRIBED') {
+          roomChannelReadyRef.current = false;
+          return;
+        }
+        roomChannelReadyRef.current = true;
+        const initialSpot = spots.find((spot) => spot.id === currentSpotId) || spots[0];
+        const customAvatarUrl =
+          effectiveCustomAvatarObject?.fileBlobUrl ||
+          (effectiveCustomAvatarObject as any)?.asset_url ||
+          (effectiveCustomAvatarObject as any)?.url;
+        const stableCustomAvatarUrl =
+          typeof customAvatarUrl === 'string' && /^https?:\/\//i.test(customAvatarUrl)
+            ? customAvatarUrl
+            : undefined;
+        await channel.track({
+          sessionId: tabSessionId,
+          displayName: myDisplayName,
+          spotId: currentSpotId,
+          position: playerPosition || initialSpot?.position,
+          avatar: liveAvatar
+            ? {
+                id: liveAvatar.id,
+                name: liveAvatar.name,
+                thumb: liveAvatar.thumb,
+                assetId: liveAvatar.assetId,
+              }
+            : null,
+          customAvatarAssetId: effectiveCustomAvatarObject?.assetId || undefined,
+          customAvatarUrl: stableCustomAvatarUrl,
+          pose: selectedPose,
+          activity: isShopping ? 'shopping' : 'room',
+        });
+        if (roomChannelRef.current !== channel) return;
+        const queuedMessages = pendingChatMessagesRef.current.splice(0);
+        for (let index = 0; index < queuedMessages.length; index += 1) {
+          const message = queuedMessages[index];
+          try {
+            const sendStatus = await channel.send({
+              type: 'broadcast',
+              event: 'chat',
+              payload: { ...message, senderSessionId: tabSessionId, isPlayer: false },
+            });
+            if (sendStatus !== 'ok') {
+              pendingChatMessagesRef.current.push(
+                ...queuedMessages.slice(index).filter(
+                  (queued) => !pendingChatMessagesRef.current.some((pending) => pending.id === queued.id)
+                )
+              );
+              break;
+            }
+          } catch {
+            pendingChatMessagesRef.current.push(
+              ...queuedMessages.slice(index).filter(
+                (queued) => !pendingChatMessagesRef.current.some((pending) => pending.id === queued.id)
+              )
+            );
+            break;
+          }
         }
       });
 
     return () => {
+      roomChannelReadyRef.current = false;
       supabase.removeChannel(channel);
       roomChannelRef.current = null;
     };
@@ -658,26 +736,36 @@ export const RoomView: React.FC<RoomViewProps> = ({
     }
   }, [avatarActions, activeAvatarActionId]);
   useEffect(() => {
-    if (roomChannelRef.current) {
+    if (roomChannelRef.current && roomChannelReadyRef.current) {
       const myDisplayName = user?.displayName || 'Visitante';
       const selectedSpot = spots.find((spot) => spot.id === currentSpotId) || spots[0];
       const customUrl =
         effectiveCustomAvatarObject?.fileBlobUrl ||
         (effectiveCustomAvatarObject as any)?.asset_url ||
         (effectiveCustomAvatarObject as any)?.url;
+      const stableCustomUrl =
+        typeof customUrl === 'string' && /^https?:\/\//i.test(customUrl) ? customUrl : undefined;
 
       roomChannelRef.current.track({
         sessionId: tabSessionId,
         displayName: myDisplayName,
         spotId: currentSpotId,
         position: playerPosition || selectedSpot?.position,
-        avatar: liveAvatar,
+        avatar: liveAvatar
+          ? {
+              id: liveAvatar.id,
+              name: liveAvatar.name,
+              thumb: liveAvatar.thumb,
+              assetId: liveAvatar.assetId,
+            }
+          : null,
+        customAvatarAssetId: effectiveCustomAvatarObject?.assetId || undefined,
         pose: selectedPose,
-        customAvatarUrl: customUrl,
+        customAvatarUrl: stableCustomUrl,
         activity: isShopping ? 'shopping' : 'room',
       });
     }
-  }, [currentSpotId, playerPosition, liveAvatar, selectedPose, tabSessionId, effectiveCustomAvatarObject, isShopping]);
+  }, [currentSpotId, playerPosition, liveAvatar, selectedPose, tabSessionId, effectiveCustomAvatarObject, isShopping, user?.displayName]);
 
   // Clean up speech bubbles after 7 seconds
   useEffect(() => {

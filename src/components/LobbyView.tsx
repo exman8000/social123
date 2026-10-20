@@ -3,14 +3,12 @@ import {
   Users,
   Gift,
   Mail,
-  ShoppingBag,
   MessageSquare,
   Bell,
   Sparkles,
   UploadCloud,
   Box,
   User,
-  Shirt,
   LogOut,
   Heart,
   ChevronLeft,
@@ -22,6 +20,7 @@ import {
 } from 'lucide-react';
 import { RoomData, CreatorUser, RoomMovementSettings } from '../types';
 import { toggleRoomLike } from '../lib/database';
+import { RoomStoreShowroom3D, RoomStoreProduct } from './RoomStoreShowroom3D';
 
 interface LobbyViewProps {
   rooms: RoomData[];
@@ -29,7 +28,6 @@ interface LobbyViewProps {
   onSelectRoomIndex: (index: number) => void;
   onEnterRoom: (room: RoomData) => void;
   onOpenUpload: () => void;
-  onOpenShop: () => void;
   onOpenFriends: () => void;
   onOpenEditor?: () => void;
   user?: CreatorUser | null;
@@ -38,6 +36,11 @@ interface LobbyViewProps {
   onLogout?: () => void;
   movementSettings: RoomMovementSettings;
   onMovementSettingsChange: (settings: RoomMovementSettings) => void;
+  storeProducts: RoomStoreProduct[];
+  storeLoading: boolean;
+  storeError: string | null;
+  coins: number | null;
+  onPurchaseStoreItem: (productId: string) => Promise<unknown>;
 }
 
 export const LobbyView: React.FC<LobbyViewProps> = ({
@@ -46,7 +49,6 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   onSelectRoomIndex,
   onEnterRoom,
   onOpenUpload,
-  onOpenShop,
   onOpenFriends,
   onOpenEditor,
   user,
@@ -55,9 +57,30 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   onLogout,
   movementSettings,
   onMovementSettingsChange,
+  storeProducts,
+  storeLoading,
+  storeError,
+  coins,
+  onPurchaseStoreItem,
 }) => {
   const activeRoom = rooms[selectedRoomIndex] || rooms[1] || rooms[0];
   const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [isStore3DOpen, setIsStore3DOpen] = useState(false);
+  const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
+
+  const handlePurchaseStoreItem = async (productId: string) => {
+    setPurchasingProductId(productId);
+    try {
+      await onPurchaseStoreItem(productId);
+    } finally {
+      setPurchasingProductId(null);
+    }
+  };
+
+  const handleOpenInventory = () => {
+    setIsStore3DOpen(false);
+    onOpenCustomization?.();
+  };
 
   // Local likes tracking
   const [likedRoomIds, setLikedRoomIds] = useState<string[]>(() => {
@@ -186,7 +209,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           <button
             id="lobby-store-btn"
             type="button"
-            onClick={onOpenShop}
+            onClick={() => setIsStore3DOpen(true)}
             className="flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-[#d4af37] to-[#ffd700] hover:from-[#e5bd38] hover:to-[#ffe033] text-black text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(255,215,0,0.45)] transition-all cursor-pointer active:scale-95 border border-[#ffd700]"
             title="Abrir Loja 3D"
           >
@@ -196,7 +219,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           <button
             id="lobby-inventory-btn"
             type="button"
-            onClick={onOpenCustomization || onOpenShop}
+            onClick={handleOpenInventory}
             className="flex items-center gap-2 rounded-xl border border-white/20 bg-black/50 px-3 py-1.5 text-xs font-bold text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-amber-300/50 hover:text-amber-100 active:scale-95"
             title="Abrir Inventário"
             aria-label="Abrir Inventário"
@@ -271,22 +294,6 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
       {/* CENTER 3D PORTAL HALL
           Player standing in foreground looking at the 3 framed portals */}
       <main className="relative flex-1 flex flex-col items-center justify-center px-4">
-        {/* Quick Action Banner: LOJA & PERSONALIZAR AVATAR */}
-        <div className="z-20 mb-2 flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              if (onOpenCustomization) onOpenCustomization();
-              else if (onOpenShop) onOpenShop();
-            }}
-            className="flex items-center gap-2.5 px-5 py-2 rounded-xl bg-black/80 hover:bg-[#d4af37] text-[#ffd700] hover:text-black border-2 border-[#ffd700] text-xs font-black tracking-wider uppercase transition-all shadow-[0_0_25px_rgba(255,215,0,0.35)] cursor-pointer active:scale-95"
-            title="Abrir Loja de Roupas e Personalizar Avatar"
-          >
-            <ShoppingBag className="w-4 h-4" />
-            <span>Personalizar Avatar & Loja de Roupas</span>
-          </button>
-        </div>
-
         {/* 3D Perspective Portals Container */}
         <div className="relative w-full max-w-5xl flex items-center justify-center gap-2 sm:gap-4 md:gap-8 perspective-[1200px] z-10 pt-2 px-2 sm:px-4">
           {/* Mobile Previous Button */}
@@ -512,36 +519,6 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             </span>
           </button>
 
-          {/* Loja */}
-          <button
-            id="nav-loja-btn"
-            type="button"
-            onClick={onOpenShop}
-            className="flex flex-col items-center justify-center w-11 h-11 sm:w-14 sm:h-14 rounded-lg sm:rounded-xl bg-black/60 hover:bg-amber-500/10 border border-amber-500/30 hover:border-amber-400 text-amber-400 transition-all cursor-pointer group flex-shrink-0"
-            title="Abrir Loja de Avatares e Itens"
-          >
-            <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5 group-hover:scale-110 transition-transform" />
-            <span className="text-[7.5px] sm:text-[9px] font-bold tracking-wider mt-0.5 sm:mt-1 text-amber-200">
-              LOJA
-            </span>
-          </button>
-
-          {/* Personalização / Inventário de Itens */}
-          {onOpenCustomization && (
-            <button
-              id="nav-personalizar-btn"
-              type="button"
-              onClick={onOpenCustomization}
-              className="flex flex-col items-center justify-center w-11 h-11 sm:w-14 sm:h-14 rounded-lg sm:rounded-xl bg-black/60 hover:bg-[#d4af37]/20 border border-[#d4af37]/40 hover:border-[#ffd700] text-[#ffd700] transition-all cursor-pointer group flex-shrink-0"
-              title="Personalização do Usuário (Inventário e Poses)"
-            >
-              <Shirt className="w-4 h-4 sm:w-5 sm:h-5 group-hover:scale-110 transition-transform" />
-              <span className="text-[7.5px] sm:text-[9px] font-bold tracking-wider mt-0.5 sm:mt-1 text-[#ffd700]">
-                VISUAL
-              </span>
-            </button>
-          )}
-
           {/* Upload 3D */}
           <button
             id="nav-upload-3d-btn"
@@ -690,6 +667,22 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             </div>
           </section>
         </div>
+      )}
+
+      {isStore3DOpen && (
+        <RoomStoreShowroom3D
+          products={storeProducts}
+          coins={coins}
+          isLoading={storeLoading}
+          error={storeError}
+          isAuthenticated={Boolean(user && !user.isGuest)}
+          assetAccessKey={user?.id || null}
+          purchasingProductId={purchasingProductId}
+          onPurchase={handlePurchaseStoreItem}
+          onBackToRoom={() => setIsStore3DOpen(false)}
+          onOpenInventory={handleOpenInventory}
+          backLabel="Voltar ao lobby"
+        />
       )}
     </div>
   );

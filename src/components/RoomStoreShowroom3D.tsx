@@ -26,6 +26,7 @@ interface RoomStoreShowroom3DProps {
   onPurchase: (productId: string) => Promise<void>;
   onBackToRoom: () => void;
   onOpenInventory: () => void;
+  backLabel?: string;
 }
 
 const PAGE_SIZE = 3;
@@ -50,6 +51,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   onPurchase,
   onBackToRoom,
   onOpenInventory,
+  backLabel = 'Voltar à sala',
 }) => {
   const canvasRef = useRef<HTMLDivElement>(null);
   const modelSlotsRef = useRef<THREE.Group[]>([]);
@@ -169,6 +171,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     return () => {
       window.cancelAnimationFrame(frame);
       resizeObserver.disconnect();
+      renderer.forceContextLoss();
       renderer.dispose();
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
@@ -293,7 +296,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
           className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/55 px-4 py-2 text-sm font-semibold text-white backdrop-blur hover:border-[#f3c866]/60"
         >
           <ArrowLeft className="h-4 w-4" />
-          Voltar à sala
+          {backLabel}
         </button>
         <div className="flex items-center gap-2 sm:gap-3">
           {coins !== null && (

@@ -162,7 +162,10 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 
   const placedObjectsMapRef = useRef<Map<string, THREE.Group>>(new Map());
   const remotePlayerSceneKey = (remotePlayers || [])
-    .map((player) => `${player.userId}:${player.avatar?.id || ''}:${player.pose?.id || ''}`)
+    .map(
+      (player) =>
+        `${player.userId}:${player.avatar?.id || ''}:${player.avatar?.assetId || ''}:${player.customAvatarAssetId || ''}:${player.pose?.id || ''}`
+    )
     .join('|');
 
   // Mouse orbit & right-click pan interaction
@@ -172,6 +175,12 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const cameraAnglesRef = useRef({ theta: 0, phi: 0.18, radius: 3.6 });
   const cameraTargetRef = useRef(new THREE.Vector3(0, 0.45, 0));
   const cameraFollowOffsetRef = useRef(new THREE.Vector3(0, 0.45, 0));
+  const touchGestureRef = useRef({
+    pinchDistance: 0,
+    midpointX: 0,
+    midpointY: 0,
+    didPinch: false,
+  });
 
   useEffect(() => {
     const container = mountRef.current;
@@ -1295,9 +1304,117 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     resizeObserver.observe(container);
 
     const domEl = renderer.domElement;
+    domEl.style.touchAction = 'none';
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+    };
+    const handleTouchStart = (e: TouchEvent) => {
+      if (interactionDisabledRef.current) return;
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        touchGestureRef.current.didPinch = false;
+        handleMouseDown(
+          new MouseEvent('mousedown', {
+            button: 0,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+          })
+        );
+      } else if (e.touches.length >= 2) {
+        const first = e.touches[0];
+        const second = e.touches[1];
+        isDraggingRef.current = false;
+        isPanningRef.current = false;
+        touchGestureRef.current.didPinch = true;
+        touchGestureRef.current.pinchDistance = Math.hypot(
+          second.clientX - first.clientX,
+          second.clientY - first.clientY
+        );
+        touchGestureRef.current.midpointX = (first.clientX + second.clientX) / 2;
+        touchGestureRef.current.midpointY = (first.clientY + second.clientY) / 2;
+      }
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      if (interactionDisabledRef.current) return;
+      e.preventDefault();
+      if (e.touches.length >= 2) {
+        const first = e.touches[0];
+        const second = e.touches[1];
+        const distance = Math.hypot(
+          second.clientX - first.clientX,
+          second.clientY - first.clientY
+        );
+        const midpointX = (first.clientX + second.clientX) / 2;
+        const midpointY = (first.clientY + second.clientY) / 2;
+        const gesture = touchGestureRef.current;
+
+        if (gesture.pinchDistance > 0 && distance > 0) {
+          cameraAnglesRef.current.radius = THREE.MathUtils.clamp(
+            cameraAnglesRef.current.radius * (gesture.pinchDistance / distance),
+            0.35,
+            30
+          );
+          if (cameraRef.current) {
+            const cam = cameraRef.current;
+            const vFovRad = (cam.fov * Math.PI) / 180;
+            const visibleHeightAtDist =
+              2 * Math.tan(vFovRad / 2) * Math.max(0.5, cameraAnglesRef.current.radius);
+            const factor = visibleHeightAtDist / Math.max(100, container.clientHeight);
+            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+            const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+            cameraFollowOffsetRef.current.addScaledVector(
+              right,
+              -(midpointX - gesture.midpointX) * factor
+            );
+            cameraFollowOffsetRef.current.addScaledVector(
+              up,
+              (midpointY - gesture.midpointY) * factor
+            );
+          }
+        }
+
+        gesture.pinchDistance = distance;
+        gesture.midpointX = midpointX;
+        gesture.midpointY = midpointY;
+      } else if (e.touches.length === 1 && !touchGestureRef.current.didPinch) {
+        const touch = e.touches[0];
+        window.dispatchEvent(
+          new MouseEvent('mousemove', {
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            buttons: 1,
+          })
+        );
+      }
+    };
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length > 0) {
+        touchGestureRef.current.didPinch = true;
+        touchGestureRef.current.pinchDistance = 0;
+        return;
+      }
+      touchGestureRef.current.pinchDistance = 0;
+      if (!touchGestureRef.current.didPinch && e.changedTouches.length > 0) {
+        const touch = e.changedTouches[0];
+        window.dispatchEvent(
+          new MouseEvent('mouseup', {
+            button: 0,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+          })
+        );
+      } else {
+        isDraggingRef.current = false;
+      }
+      touchGestureRef.current.didPinch = false;
+    };
+    const handleTouchCancel = () => {
+      isDraggingRef.current = false;
+      isPanningRef.current = false;
+      touchGestureRef.current.pinchDistance = 0;
+      touchGestureRef.current.didPinch = false;
     };
     domEl.addEventListener('contextmenu', handleContextMenu);
     container.addEventListener('contextmenu', handleContextMenu);
@@ -1305,6 +1422,10 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     domEl.addEventListener('wheel', handleWheel, { passive: false });
+    domEl.addEventListener('touchstart', handleTouchStart, { passive: false });
+    domEl.addEventListener('touchmove', handleTouchMove, { passive: false });
+    domEl.addEventListener('touchend', handleTouchEnd);
+    domEl.addEventListener('touchcancel', handleTouchCancel);
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
@@ -1316,7 +1437,12 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       domEl.removeEventListener('wheel', handleWheel);
+      domEl.removeEventListener('touchstart', handleTouchStart);
+      domEl.removeEventListener('touchmove', handleTouchMove);
+      domEl.removeEventListener('touchend', handleTouchEnd);
+      domEl.removeEventListener('touchcancel', handleTouchCancel);
       window.removeEventListener('keydown', handleKeyDown);
+      domEl.style.touchAction = '';
       if (container.contains(domEl)) {
         container.removeChild(domEl);
       }
@@ -1458,11 +1584,19 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const poseGlbKey = player.pose?.glbKey || 'stand';
         const isSeated = poseGlbKey.includes('sit') || (spot as any).type === 'sentar';
 
-        const avatarGlbUrl =
-          player.avatar?.fileBlobUrl ||
-          player.avatar?.asset_url ||
-          player.customAvatarUrl ||
-          player.avatarUrl;
+        const directAvatarUrl = [
+          player.avatar?.fileBlobUrl,
+          player.avatar?.asset_url,
+          player.customAvatarUrl,
+          player.avatarUrl,
+        ].find(
+          (url) => typeof url === 'string' && /^https?:\/\//i.test(url)
+        ) as string | undefined;
+        const avatarAssetId =
+          player.avatar?.assetId ||
+          player.customAvatarAssetId ||
+          extractAssetUuid(player.avatar?.asset_url) ||
+          extractAssetUuid(player.customAvatarUrl);
         const playerContainer = new THREE.Group();
         const remotePosition = player.position;
         playerContainer.position.set(
@@ -1516,12 +1650,32 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const headHeight = isSeated ? 1.0 : 1.45;
         headPosRef.current[player.spotId] = new THREE.Vector3(posX, posY + headHeight, posZ);
 
-        // Render remote users only when their real avatar asset has a valid URL.
-        if (avatarGlbUrl && (avatarGlbUrl.startsWith('http://') || avatarGlbUrl.startsWith('https://') || avatarGlbUrl.startsWith('data:'))) {
+        const fallbackAvatar = new THREE.Group();
+        const fallbackMaterial = new THREE.MeshStandardMaterial({
+          color: '#d6b33f',
+          roughness: 0.72,
+          metalness: 0.08,
+        });
+        const torso = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.22, 0.62, 4, 8),
+          fallbackMaterial
+        );
+        torso.position.y = 0.58;
+        fallbackAvatar.add(torso);
+        const head = new THREE.Mesh(
+          new THREE.SphereGeometry(0.18, 12, 10),
+          fallbackMaterial
+        );
+        head.position.y = 1.12;
+        fallbackAvatar.add(head);
+        playerContainer.add(fallbackAvatar);
+
+        const loadAvatar = (avatarGlbUrl: string) => {
           const loader = new GLTFLoader();
           loader.load(
             avatarGlbUrl,
             (gltf) => {
+              if (playerContainer.parent !== group) return;
               const glbModel = gltf.scene;
               const box = new THREE.Box3().setFromObject(glbModel);
               const size = box.getSize(new THREE.Vector3());
@@ -1534,6 +1688,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               glbModel.position.z = -center.z * scale;
               glbModel.position.y = -box.min.y * scale;
 
+              playerContainer.remove(fallbackAvatar);
               playerContainer.add(glbModel);
             },
             undefined,
@@ -1541,6 +1696,14 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               console.warn('Could not load remote player GLB model:', err);
             }
           );
+        };
+
+        if (directAvatarUrl) {
+          loadAvatar(directAvatarUrl);
+        } else if (avatarAssetId) {
+          void resolveAssetDownloadUrl(avatarAssetId, editorRoom?.id).then((url) => {
+            if (url && playerContainer.parent === group) loadAvatar(url);
+          });
         }
 
         group.add(playerContainer);

@@ -2591,10 +2591,6 @@ export const App: React.FC = () => {
             setCurrentScreen('room');
           }}
           onOpenUpload={() => setIsUploadModalOpen(true)}
-          onOpenShop={() => {
-            setCustomizationInitialTab('loja');
-            setCurrentScreen('customization');
-          }}
           onOpenCustomization={() => {
             setCustomizationInitialTab('inventario');
             setCurrentScreen('customization');
@@ -2608,6 +2604,11 @@ export const App: React.FC = () => {
           onLogout={handleLogout}
           movementSettings={roomMovementSettings}
           onMovementSettingsChange={setRoomMovementSettings}
+          storeProducts={roomStoreCatalog}
+          storeLoading={storeLoading}
+          storeError={storeError}
+          coins={walletCoins}
+          onPurchaseStoreItem={handlePurchaseStoreItem}
         />
       )}
 
@@ -2619,6 +2620,7 @@ export const App: React.FC = () => {
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
           onLogout={handleLogout}
           initialTab={customizationInitialTab}
+          hideStoreTab={customizationInitialTab === 'inventario'}
           userInventory={inventory}
           customizationItems={customizationItems}
           storeAvatars={storeAvatars}
