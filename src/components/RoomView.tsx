@@ -107,6 +107,11 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
   // Gizmo & Transform State (Mover -> Escala -> Rotação)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('mover');
+  const [cameraControl, setCameraControl] = useState({
+    panX: 0,
+    panY: 0,
+    zoom: 0,
+  });
   const [transform, setTransform] = useState<AvatarTransform>({
     scale: 1.0,
     sizeY: 1.0,
@@ -498,8 +503,24 @@ export const RoomView: React.FC<RoomViewProps> = ({
     setGizmoMode((prev) => {
       if (prev === 'mover') return 'escalar';
       if (prev === 'escalar') return 'rodar';
+      if (prev === 'rodar') return 'camera';
       return 'mover';
     });
+  };
+
+  const handleCameraPan = (deltaX: number, deltaY: number) => {
+    setCameraControl((current) => ({
+      ...current,
+      panX: current.panX + deltaX,
+      panY: current.panY + deltaY,
+    }));
+  };
+
+  const handleCameraZoom = (delta: number) => {
+    setCameraControl((current) => ({
+      ...current,
+      zoom: current.zoom + delta,
+    }));
   };
 
   // Send message from chat
@@ -792,6 +813,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
           movementDuration={movementDuration}
           onPlayerPositionChange={setPlayerPosition}
           cameraMode={cameraMode}
+          cameraControl={cameraControl}
           equippedAccessories={equippedAccessories}
           onUpdateAvatarHeadScreenPos={setScreenHeadPositions}
           key={`${room.editorRoom?.id || room.id}:${editorRoomForScene?.sceneAssetId || 'default'}`}
@@ -935,6 +957,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
           transform={transform}
           onChangeTransform={setTransform}
           onSetMode={setGizmoMode}
+          onCameraPan={handleCameraPan}
+          onCameraZoom={handleCameraZoom}
           spotRadius={
             (spots.find((s) => s.id === currentSpotId) as any)?.relativeRadius ||
             (spots.find((s) => s.id === currentSpotId) as any)?.radius ||

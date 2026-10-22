@@ -17,6 +17,7 @@ import {
   ChevronUp,
   ChevronDown,
   Crosshair,
+  Camera,
 } from 'lucide-react';
 
 interface GizmoWidgetProps {
@@ -25,6 +26,8 @@ interface GizmoWidgetProps {
   transform: AvatarTransform;
   onChangeTransform: (newTransform: AvatarTransform) => void;
   onSetMode?: (mode: GizmoMode) => void;
+  onCameraPan?: (deltaX: number, deltaY: number) => void;
+  onCameraZoom?: (delta: number) => void;
   spotRadius?: number;
   onClose?: () => void;
 }
@@ -35,6 +38,8 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
   transform,
   onChangeTransform,
   onSetMode,
+  onCameraPan,
+  onCameraZoom,
   spotRadius = 0.45,
   onClose,
 }) => {
@@ -105,6 +110,17 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
       secondaryColor: '#0891b2',
       desc: 'Elevar (Y) · clique no centro p/ trocar',
       displayVal: `${Math.round(transform.sizeY * 100)}%`,
+    },
+    camera: {
+      label: 'Câmera',
+      colorName: 'azul',
+      hex: '#38bdf8',
+      ringColor: 'rgba(56, 189, 248, 0.75)',
+      glowColor: 'rgba(56, 189, 248, 0.45)',
+      centerColor: '#bae6fd',
+      secondaryColor: '#0284c7',
+      desc: 'Câmera · arraste para mover a vista',
+      displayVal: 'PAN · ZOOM',
     },
   };
 
@@ -190,6 +206,8 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
       } else if (effectiveMode === 'elevar') {
         const nextSizeY = Math.min(2.0, Math.max(0.5, transform.sizeY + movement * 0.004));
         onChangeTransform({ ...transform, sizeY: parseFloat(nextSizeY.toFixed(2)) });
+      } else if (effectiveMode === 'camera') {
+        onCameraPan?.(deltaX, -deltaY);
       }
 
       dragStartPosRef.current = { x: moveEvent.clientX, y: moveEvent.clientY };
@@ -227,6 +245,8 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
           ...transform,
           positionOffset: [clampedX, curY, clampedZ],
         });
+      } else if (effectiveMode === 'camera') {
+        onCameraPan?.(deltaX, -deltaY);
       }
       dragStartPosRef.current = { x: t.clientX, y: t.clientY };
     };
@@ -266,9 +286,9 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
   return (
     <div className="flex flex-col items-start gap-1 select-none pointer-events-auto">
       {/* Top Header: Mode Pills + Minimize */}
-      <div className="flex items-center justify-between w-full max-w-[160px] bg-[#121317]/90 px-1 py-1 rounded-xl border border-white/10 shadow-lg text-[10px] backdrop-blur-md">
-        <div className="flex items-center gap-1">
-          {(['mover', 'escalar', 'rodar'] as const).map((m) => {
+      <div className="flex items-center justify-between w-full max-w-[196px] bg-[#121317]/90 px-1 py-1 rounded-xl border border-white/10 shadow-lg text-[10px] backdrop-blur-md">
+        <div className="flex items-center gap-0.5">
+          {(['mover', 'escalar', 'rodar', 'camera'] as const).map((m) => {
             const isActive = effectiveMode === m;
             const conf = modeConfigs[m];
             return (
@@ -276,12 +296,13 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
                 key={m}
                 type="button"
                 onClick={() => (onSetMode ? onSetMode(m) : onCycleMode())}
-                className={`px-1.5 py-0.5 rounded-lg font-bold transition-all cursor-pointer ${
+                className={`px-1 py-1 rounded-lg font-bold transition-all cursor-pointer ${
                   isActive ? 'text-black shadow-md' : 'text-zinc-400 hover:text-white'
                 }`}
                 style={{ backgroundColor: isActive ? conf.hex : undefined }}
+                aria-label={`Modo ${conf.label}`}
               >
-                {conf.label}
+                {m === 'camera' ? <Camera className="w-3 h-3" /> : conf.label}
               </button>
             );
           })}
@@ -301,9 +322,15 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
       {/* Main Gizmo Container */}
       <div
         id="gizmo-container"
-        className="relative w-40 h-40 bg-[#16171a]/95 backdrop-blur-md rounded-2xl border border-white/10 p-2 shadow-2xl flex flex-col items-center justify-center cursor-grab active:cursor-grabbing group overflow-hidden"
+        className="relative w-40 h-40 bg-[#16171a]/95 backdrop-blur-md rounded-2xl border border-white/10 p-2 shadow-2xl flex flex-col items-center justify-center cursor-grab active:cursor-grabbing group overflow-hidden touch-none"
         onMouseDown={handleMouseDown}
-        onTouchStart={handleTouchStart}
+        onTouchStart={(e) => {
+          e.stopPropagation();
+          if (!(e.target as HTMLElement).closest('button')) {
+            e.preventDefault();
+          }
+          handleTouchStart(e);
+        }}
         title="Arraste para ajuste contínuo ou use as setas para ajuste fino sem sair do spot"
       >
         {/* Glow backdrop */}
@@ -521,6 +548,65 @@ export const GizmoWidget: React.FC<GizmoWidgetProps> = ({
             >
               <Plus className="w-4 h-4" />
             </button>
+          </div>
+        )}
+
+        {effectiveMode === 'camera' && (
+          <div className="relative z-10 grid h-32 w-32 grid-cols-3 grid-rows-3 place-items-center">
+            <span />
+            <button
+              type="button"
+              onClick={() => onCameraPan?.(0, -48)}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400/60 bg-sky-500/20 text-sky-200 active:scale-90"
+              aria-label="Mover câmera para cima"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </button>
+            <span />
+            <button
+              type="button"
+              onClick={() => onCameraPan?.(-48, 0)}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400/60 bg-sky-500/20 text-sky-200 active:scale-90"
+              aria-label="Mover câmera para esquerda"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onCameraZoom?.(-0.18)}
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-sky-400/60 bg-sky-500/20 text-sky-200 active:scale-90"
+                aria-label="Aproximar câmera"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onCameraZoom?.(0.18)}
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-sky-400/60 bg-sky-500/20 text-sky-200 active:scale-90"
+                aria-label="Afastar câmera"
+              >
+                <Minus className="h-4 w-4" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => onCameraPan?.(48, 0)}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400/60 bg-sky-500/20 text-sky-200 active:scale-90"
+              aria-label="Mover câmera para direita"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </button>
+            <span />
+            <button
+              type="button"
+              onClick={() => onCameraPan?.(0, 48)}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-400/60 bg-sky-500/20 text-sky-200 active:scale-90"
+              aria-label="Mover câmera para baixo"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </button>
+            <span />
           </div>
         )}
 

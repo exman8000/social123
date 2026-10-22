@@ -28,6 +28,7 @@ interface LoungeCanvas3DProps {
   transform: AvatarTransform;
   spots: Spot[];
   currentSpotId: number;
+  cameraControl?: { panX: number; panY: number; zoom: number };
   onSelectSpot: (spotId: number) => void;
   freeMoveEnabled?: boolean;
   clickSpotsEnabled?: boolean;
@@ -53,6 +54,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   transform,
   spots,
   currentSpotId,
+  cameraControl,
   onSelectSpot,
   freeMoveEnabled = false,
   clickSpotsEnabled = true,
@@ -181,6 +183,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const cameraPanOffsetRef = useRef(new THREE.Vector3());
   const cameraFocusTargetRef = useRef<THREE.Vector3 | null>(null);
   const cameraFocusUserIdRef = useRef<string | null>(null);
+  const appliedCameraControlRef = useRef({ panX: 0, panY: 0, zoom: 0 });
   const touchGestureRef = useRef({
     pinchDistance: 0,
     midpointX: 0,
@@ -1549,6 +1552,37 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       renderer.dispose();
     };
   }, []);
+
+  useEffect(() => {
+    const previous = appliedCameraControlRef.current;
+    const panX = cameraControl?.panX ?? 0;
+    const panY = cameraControl?.panY ?? 0;
+    const zoom = cameraControl?.zoom ?? 0;
+    const deltaX = panX - previous.panX;
+    const deltaY = panY - previous.panY;
+    const deltaZoom = zoom - previous.zoom;
+    appliedCameraControlRef.current = { panX, panY, zoom };
+
+    const camera = cameraRef.current;
+    const container = mountRef.current;
+    if (camera && container && (deltaX !== 0 || deltaY !== 0)) {
+      const vFovRad = (camera.fov * Math.PI) / 180;
+      const visibleHeightAtDist =
+        2 * Math.tan(vFovRad / 2) * Math.max(0.5, cameraAnglesRef.current.radius);
+      const factor = visibleHeightAtDist / Math.max(100, container.clientHeight);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+      cameraPanOffsetRef.current.addScaledVector(right, -deltaX * factor);
+      cameraPanOffsetRef.current.addScaledVector(up, deltaY * factor);
+    }
+    if (deltaZoom !== 0) {
+      cameraAnglesRef.current.radius = THREE.MathUtils.clamp(
+        cameraAnglesRef.current.radius * Math.exp(deltaZoom),
+        MIN_CAMERA_RADIUS,
+        MAX_CAMERA_RADIUS
+      );
+    }
+  }, [cameraControl?.panX, cameraControl?.panY, cameraControl?.zoom]);
 
   useEffect(() => {
     if (!focusAvatarRequest) return;

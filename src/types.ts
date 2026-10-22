@@ -203,7 +203,7 @@ export interface SpotVisualConfig {
 }
 
 // Social / Interactive Room Gizmo Modes (harmonized with Creator Mode)
-export type GizmoMode = 'mover' | 'escalar' | 'rodar' | 'elevar' | 'scale' | 'sizeY' | 'angle';
+export type GizmoMode = 'mover' | 'escalar' | 'rodar' | 'elevar' | 'camera' | 'scale' | 'sizeY' | 'angle';
 
 export interface AvatarTransform {
   scale: number;
