@@ -30,6 +30,7 @@ interface RoomStoreShowroom3DProps {
 }
 
 const DESKTOP_PAGE_SIZE = 3;
+const MOBILE_VIEWPORT_QUERY = '(max-width: 767px), (pointer: coarse)';
 
 const disposeModel = (root: THREE.Object3D) => {
   root.traverse((object) => {
@@ -54,13 +55,11 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   backLabel = 'Voltar à sala',
 }) => {
   const canvasRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const modelSlotsRef = useRef<THREE.Group[]>([]);
   const podiumsRef = useRef<THREE.Group[]>([]);
-  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const [page, setPage] = useState(0);
   const [isMobile, setIsMobile] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+    () => typeof window !== 'undefined' && window.matchMedia(MOBILE_VIEWPORT_QUERY).matches
   );
   const [loadedIds, setLoadedIds] = useState<Set<string>>(() => new Set());
   const [failedIds, setFailedIds] = useState<Set<string>>(() => new Set());
@@ -74,7 +73,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   const pageCount = Math.ceil(products.length / pageSize);
 
   useEffect(() => {
-    const media = window.matchMedia('(max-width: 639px)');
+    const media = window.matchMedia(MOBILE_VIEWPORT_QUERY);
     const updateMobile = () => {
       setIsMobile(media.matches);
       setPage(0);
@@ -96,11 +95,21 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     scene.fog = new THREE.Fog('#0c0d12', 10, 24);
 
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
-    camera.position.set(0, 3.8, 9.4);
-    camera.lookAt(0, 1.2, 0);
+    const compactViewport = window.matchMedia(MOBILE_VIEWPORT_QUERY);
+    const updateCameraForViewport = () => {
+      const compact = compactViewport.matches;
+      camera.position.set(0, compact ? 3.2 : 3.8, compact ? 7.2 : 9.4);
+      camera.lookAt(0, compact ? 0.95 : 1.2, 0);
+      podiumsRef.current.forEach((podium, index) => {
+        podium.visible = !compact || index === 0;
+        podium.position.x = compact ? 0 : [-2.25, 0, 2.25][index];
+      });
+      camera.aspect = container.clientWidth / Math.max(1, container.clientHeight);
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
+    };
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    rendererRef.current = renderer;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -174,9 +183,11 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
       camera.updateProjectionMatrix();
     });
     resizeObserver.observe(container);
+    compactViewport.addEventListener('change', updateCameraForViewport);
     renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
     camera.aspect = (container.clientWidth || window.innerWidth) / (container.clientHeight || window.innerHeight);
     camera.updateProjectionMatrix();
+    updateCameraForViewport();
 
     let frame = 0;
     const animate = () => {
@@ -191,9 +202,9 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     return () => {
       window.cancelAnimationFrame(frame);
       resizeObserver.disconnect();
+      compactViewport.removeEventListener('change', updateCameraForViewport);
       renderer.forceContextLoss();
       renderer.dispose();
-      rendererRef.current = null;
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           object.geometry.dispose();
@@ -206,45 +217,6 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
       podiumsRef.current = [];
     };
   }, []);
-
-  useEffect(() => {
-    podiumsRef.current.forEach((podium, index) => {
-      const isVisible = !isMobile || index === 0;
-      podium.visible = isVisible;
-      if (isVisible) podium.position.x = isMobile ? 0 : [-2.25, 0, 2.25][index];
-    });
-    const container = canvasRef.current;
-    const renderer = rendererRef.current;
-    if (container && renderer) {
-      renderer.setSize(container.clientWidth, container.clientHeight);
-    }
-  }, [isMobile, visibleProducts.length]);
-
-  const handleSwipeStart = (event: React.TouchEvent<HTMLDivElement>) => {
-    if (event.touches.length !== 1) {
-      swipeStartRef.current = null;
-      return;
-    }
-    if ((event.target as HTMLElement).closest('button, a, input')) {
-      swipeStartRef.current = null;
-      return;
-    }
-    const touch = event.touches[0];
-    if (touch) swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
-  };
-
-  const handleSwipeEnd = (event: React.TouchEvent<HTMLDivElement>) => {
-    const start = swipeStartRef.current;
-    swipeStartRef.current = null;
-    const touch = event.changedTouches[0];
-    if (!isMobile || !start || !touch) return;
-    const deltaX = touch.clientX - start.x;
-    const deltaY = touch.clientY - start.y;
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
-    setPage((current) =>
-      Math.max(0, Math.min(pageCount - 1, current + (deltaX < 0 ? 1 : -1)))
-    );
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -347,12 +319,8 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     ({ avatar: 'AVATAR', pose: 'POSE', accessory: 'ACESSÓRIO', item: 'ITEM' })[kind];
 
   return (
-    <div
-      className="absolute inset-0 z-[60] overflow-hidden bg-[#0c0d12] text-white"
-      onTouchStart={handleSwipeStart}
-      onTouchEnd={handleSwipeEnd}
-    >
-      <div ref={canvasRef} className="absolute inset-0" aria-label="Vitrine 3D com três pedestais de itens publicados" />
+    <div className="absolute inset-0 z-[60] overflow-hidden bg-[#0c0d12] text-white">
+      <div ref={canvasRef} className="absolute inset-0" aria-label={isMobile ? 'Vitrine 3D com um pedestal de cada vez' : 'Vitrine 3D com três pedestais de itens publicados'} />
 
       <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/75 to-transparent px-4 py-4 sm:px-8">
         <button
@@ -381,12 +349,9 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
         </div>
       </header>
 
-      <div className="pointer-events-none absolute inset-x-0 top-[12%] z-10 text-center">
+      <div className={`pointer-events-none absolute inset-x-0 z-10 text-center ${isMobile ? 'top-[10%]' : 'top-[12%]'}`}>
         <p className="text-[10px] font-bold uppercase tracking-[0.42em] text-[#f3c866]">Novidades da loja</p>
         <h2 className="mt-2 text-2xl font-black tracking-wide text-white drop-shadow-lg sm:text-4xl">VITRINE 3D</h2>
-        {isMobile && products.length > 1 && (
-          <p className="mt-1 text-[10px] text-zinc-300">Deslize para o lado para ver outros itens</p>
-        )}
       </div>
 
       {isLoading && (
@@ -408,7 +373,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
         </div>
       )}
 
-      <div className={`absolute inset-x-0 z-10 flex items-end justify-center gap-2 px-2 sm:gap-6 sm:px-8 ${isMobile ? 'bottom-[9%]' : 'bottom-[7%]'}`}>
+      <div className={`absolute inset-x-0 z-10 flex items-end justify-center gap-2 px-2 sm:gap-6 sm:px-8 ${isMobile ? 'bottom-[12%]' : 'bottom-[7%]'}`}>
         {visibleProducts.map((product) => {
           const isPurchasing = purchasingProductId === product.id;
           const modelLoading = !loadedIds.has(product.id);
@@ -498,19 +463,21 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
             disabled={page === 0}
             onClick={() => setPage((current) => Math.max(0, current - 1))}
             className="rounded-full border border-white/15 bg-black/60 p-2.5 text-white backdrop-blur hover:border-[#f3c866]/50 disabled:opacity-35"
-            aria-label="Itens anteriores"
+            aria-label={isMobile ? 'Produto anterior' : 'Itens anteriores'}
+            title={isMobile ? 'Produto anterior' : 'Itens anteriores'}
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
           <span className="rounded-full bg-black/60 px-3 py-1 text-[10px] font-semibold text-zinc-300 backdrop-blur">
-            {page + 1} / {pageCount}
+            {page + 1} / { (isMobile ? products.length : pageCount)}
           </span>
           <button
             type="button"
             disabled={page >= pageCount - 1}
             onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
             className="rounded-full border border-white/15 bg-black/60 p-2.5 text-white backdrop-blur hover:border-[#f3c866]/50 disabled:opacity-35"
-            aria-label="Próximos itens"
+            aria-label={isMobile ? 'Próximo produto' : 'Próximos itens'}
+            title={isMobile ? 'Próximo produto' : 'Próximos itens'}
           >
             <ArrowRight className="h-4 w-4" />
           </button>
