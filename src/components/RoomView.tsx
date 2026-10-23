@@ -683,11 +683,27 @@ export const RoomView: React.FC<RoomViewProps> = ({
           displayName: string;
           spotId: number;
           position?: [number, number, number];
+          avatar?: unknown;
+          customAvatarAssetId?: string | null;
+          customAvatarUrl?: string | null;
+          pose?: unknown;
+          activity?: 'shopping' | 'room';
         } = {
           userId: payload.senderSessionId,
           displayName: typeof payload.displayName === 'string' ? payload.displayName : 'Usuário',
           spotId: Number.isFinite(Number(payload.spotId)) ? Number(payload.spotId) : 1,
           position,
+          ...(payload.avatar !== undefined ? { avatar: payload.avatar } : {}),
+          ...(typeof payload.customAvatarAssetId === 'string' || payload.customAvatarAssetId === null
+            ? { customAvatarAssetId: payload.customAvatarAssetId }
+            : {}),
+          ...(typeof payload.customAvatarUrl === 'string' || payload.customAvatarUrl === null
+            ? { customAvatarUrl: payload.customAvatarUrl }
+            : {}),
+          ...(payload.pose !== undefined ? { pose: payload.pose } : {}),
+          ...(payload.activity === 'shopping' || payload.activity === 'room'
+            ? { activity: payload.activity }
+            : {}),
         };
         setRemotePlayers((currentPlayers) => {
           const existingIndex = currentPlayers.findIndex(
@@ -825,6 +841,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
     const state = localPresenceStateRef.current;
     const avatarAssetId = extractAssetUuid(state.liveAvatar);
     const customAvatarAssetId = extractAssetUuid(state.customAvatarObject);
+    const poseAssetId = extractAssetUuid(state.selectedPose);
     const customAvatarSource =
       state.customAvatarObject?.fileBlobUrl ||
       (state.customAvatarObject as any)?.asset_url ||
@@ -839,9 +856,17 @@ export const RoomView: React.FC<RoomViewProps> = ({
         ? customAvatarSource
         : undefined;
 
-    const [resolvedAvatarUrl, resolvedCustomAvatarUrl] = await Promise.all([
-      avatarAssetId ? resolveAssetDownloadUrl(avatarAssetId) : Promise.resolve(null),
-      customAvatarAssetId ? resolveAssetDownloadUrl(customAvatarAssetId) : Promise.resolve(null),
+    const directPoseUrl =
+      typeof state.selectedPose.fileBlobUrl === 'string' &&
+      /^https?:\/\//i.test(state.selectedPose.fileBlobUrl)
+        ? state.selectedPose.fileBlobUrl
+        : undefined;
+    const [resolvedAvatarUrl, resolvedCustomAvatarUrl, resolvedPoseUrl] = await Promise.all([
+      avatarAssetId ? resolveAssetDownloadUrl(avatarAssetId, effectiveRoomId) : Promise.resolve(null),
+      customAvatarAssetId
+        ? resolveAssetDownloadUrl(customAvatarAssetId, effectiveRoomId)
+        : Promise.resolve(null),
+      poseAssetId ? resolveAssetDownloadUrl(poseAssetId, effectiveRoomId) : Promise.resolve(null),
     ]);
     if (
       trackVersion !== presenceTrackVersionRef.current ||
@@ -852,28 +877,48 @@ export const RoomView: React.FC<RoomViewProps> = ({
     }
 
     const selectedSpot = state.spots.find((spot) => spot.id === state.currentSpotId) || state.spots[0];
+    const playerState = {
+      sessionId: tabSessionId,
+      displayName: state.displayName,
+      spotId: state.currentSpotId,
+      position: state.playerPosition || selectedSpot?.position,
+      avatar: state.liveAvatar
+        ? {
+            id: state.liveAvatar.id,
+            name: state.liveAvatar.name,
+            thumb: state.liveAvatar.thumb,
+            assetId: avatarAssetId || undefined,
+            fileBlobUrl: resolvedAvatarUrl || directAvatarUrl,
+          }
+        : null,
+      customAvatarAssetId: customAvatarAssetId || undefined,
+      customAvatarUrl: resolvedCustomAvatarUrl || directCustomAvatarUrl,
+      pose: {
+        ...state.selectedPose,
+        assetId: poseAssetId || undefined,
+        fileBlobUrl: resolvedPoseUrl || directPoseUrl,
+      },
+      activity: state.isShopping ? 'shopping' as const : 'room' as const,
+    };
     try {
-      const status = await channel.track({
-        sessionId: tabSessionId,
-        displayName: state.displayName,
-        spotId: state.currentSpotId,
-        position: state.playerPosition || selectedSpot?.position,
-        avatar: state.liveAvatar
-          ? {
-              id: state.liveAvatar.id,
-              name: state.liveAvatar.name,
-              thumb: state.liveAvatar.thumb,
-              assetId: avatarAssetId || undefined,
-              fileBlobUrl: resolvedAvatarUrl || directAvatarUrl,
-            }
-          : null,
-        customAvatarAssetId: customAvatarAssetId || undefined,
-        customAvatarUrl: resolvedCustomAvatarUrl || directCustomAvatarUrl,
-        pose: state.selectedPose,
-        activity: state.isShopping ? 'shopping' : 'room',
-      });
+      const status = await channel.track(playerState);
       if (status !== 'ok' && roomChannelRef.current === channel) {
         console.warn('[Room realtime] Presence update failed:', { status });
+        return;
+      }
+      if (
+        trackVersion === presenceTrackVersionRef.current &&
+        roomChannelRef.current === channel &&
+        roomChannelReadyRef.current
+      ) {
+        const broadcastStatus = await channel.send({
+          type: 'broadcast',
+          event: 'player-state',
+          payload: { ...playerState, senderSessionId: tabSessionId },
+        });
+        if (broadcastStatus !== 'ok' && roomChannelRef.current === channel) {
+          console.warn('[Room realtime] Avatar/pose broadcast failed:', { status: broadcastStatus });
+        }
       }
     } catch (error) {
       if (roomChannelRef.current === channel) {

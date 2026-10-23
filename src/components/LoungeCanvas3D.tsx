@@ -170,7 +170,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const remotePlayerSceneKey = (remotePlayers || [])
     .map(
       (player) =>
-        `${player.userId}:${player.displayName || ''}:${player.avatar?.id || ''}:${player.avatar?.assetId || ''}:${player.avatar?.fileBlobUrl || ''}:${player.avatar?.asset_url || ''}:${player.avatar?.url || ''}:${player.customAvatarAssetId || ''}:${player.customAvatarUrl || ''}:${player.avatarUrl || ''}:${player.pose?.id || ''}:${player.pose?.glbKey || ''}`
+        `${player.userId}:${player.displayName || ''}:${player.avatar?.id || ''}:${player.avatar?.name || ''}:${player.avatar?.assetId || ''}:${player.avatar?.fileBlobUrl || ''}:${player.avatar?.asset_url || ''}:${player.avatar?.url || ''}:${player.customAvatarAssetId || ''}:${player.customAvatarUrl || ''}:${player.avatarUrl || ''}:${player.pose?.id || ''}:${player.pose?.name || ''}:${player.pose?.assetId || ''}:${player.pose?.fileBlobUrl || ''}:${player.pose?.glbKey || ''}`
     )
     .join('|');
 
@@ -912,11 +912,15 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
                 spot.position[2]
               );
           container.position.lerp(target, 0.12);
-          container.rotation.y = THREE.MathUtils.degToRad(spot.rotation || 0);
+          container.rotation.y = THREE.MathUtils.degToRad(
+            (spot.rotation || 0) + (remote.pose?.rotationOffset || 0)
+          );
           headPosRef.current[String(remote.userId)] = new THREE.Vector3(
             container.position.x,
             container.position.y +
-              (remote.pose?.glbKey?.includes('sit') || (spot as any).type === 'sentar'
+              (remote.pose?.glbKey?.toLowerCase().includes('sit') ||
+              remote.pose?.name?.toLowerCase().includes('sentar') ||
+              (spot as any).type === 'sentar'
                 ? 1.0
                 : 1.45),
             container.position.z
@@ -1734,8 +1738,18 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const posZ = spot.position?.[2] ?? 0;
         const rotY = THREE.MathUtils.degToRad(spot.rotation || 0);
 
-        const poseGlbKey = player.pose?.glbKey || 'stand';
-        const isSeated = poseGlbKey.includes('sit') || (spot as any).type === 'sentar';
+        const poseName = String(player.pose?.name || '').toLowerCase();
+        const poseGlbKey = String(player.pose?.glbKey || '').toLowerCase();
+        const isSeated =
+          poseGlbKey.includes('sit') ||
+          poseName.includes('sentar') ||
+          (spot as any).type === 'sentar';
+        const poseAssetUrl =
+          typeof player.pose?.fileBlobUrl === 'string' &&
+          /^https?:\/\//i.test(player.pose.fileBlobUrl)
+            ? player.pose.fileBlobUrl
+            : undefined;
+        const poseAssetId = extractAssetUuid(player.pose);
 
         const avatarUrls = [
           ...new Set(
@@ -1841,9 +1855,23 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const loader = new GLTFLoader();
         let directUrlIndex = 0;
         let assetIdIndex = 0;
+        let poseAttempted = false;
 
         const tryNextAvatarSource = async (): Promise<void> => {
           if (playerContainer.parent !== group) return;
+          if (!poseAttempted) {
+            poseAttempted = true;
+            let resolvedPoseUrl = poseAssetUrl;
+            if (!resolvedPoseUrl && poseAssetId) {
+              resolvedPoseUrl = (await resolveAssetDownloadUrl(poseAssetId, editorRoom?.id)) || undefined;
+            }
+            if (playerContainer.parent !== group) return;
+            if (resolvedPoseUrl) {
+              loadAvatar(resolvedPoseUrl, true);
+              return;
+            }
+          }
+
           const nextDirectUrl = avatarUrls[directUrlIndex++];
           if (nextDirectUrl) {
             loadAvatar(nextDirectUrl);
@@ -1861,7 +1889,26 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           }
         };
 
-        const loadAvatar = (avatarGlbUrl: string) => {
+        const applyRemotePoseAdjustment = (model: THREE.Group) => {
+          if (poseName.includes('sentar') || poseName.includes('sitting')) {
+            model.position.y -= 0.38;
+          } else if (poseName.includes('deitar') || poseName.includes('reclinad')) {
+            model.rotation.x = -Math.PI / 4.2;
+            model.position.y -= 0.25;
+            model.position.z -= 0.2;
+          } else if (poseName.includes('acenar') || poseName.includes('wave')) {
+            model.rotation.z = -0.06;
+            model.rotation.y = 0.12;
+          } else if (poseName.includes('rindo') || poseName.includes('laugh')) {
+            model.rotation.x = 0.1;
+            model.rotation.z = -0.03;
+          } else if (poseName.includes('modelo') || poseName.includes('noir')) {
+            model.rotation.y = 0.25;
+            model.rotation.z = 0.04;
+          }
+        };
+
+        const loadAvatar = (avatarGlbUrl: string, isPoseModel = false) => {
           loader.load(
             avatarGlbUrl,
             (gltf) => {
@@ -1869,7 +1916,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               const glbModel = gltf.scene;
               const box = new THREE.Box3().setFromObject(glbModel);
               const size = box.getSize(new THREE.Vector3());
-              const targetHeight = isSeated ? 1.0 : 1.6;
+              const targetHeight = isPoseModel ? 1.7 : isSeated ? 1.0 : 1.6;
               const scale = size.y > 0 ? targetHeight / size.y : 1;
               glbModel.scale.set(scale, scale, scale);
 
@@ -1877,13 +1924,18 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               glbModel.position.x = -center.x * scale;
               glbModel.position.z = -center.z * scale;
               glbModel.position.y = -box.min.y * scale;
+              if (!isPoseModel) applyRemotePoseAdjustment(glbModel);
 
               playerContainer.remove(fallbackAvatar);
               playerContainer.add(glbModel);
             },
             undefined,
             (err) => {
-              console.warn('Could not load remote player GLB model:', err);
+              console.warn('Could not load remote player GLB model:', {
+                userId: player.userId,
+                assetId: isPoseModel ? poseAssetId : undefined,
+                error: err,
+              });
               void tryNextAvatarSource();
             }
           );
