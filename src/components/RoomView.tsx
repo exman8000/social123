@@ -512,7 +512,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
   }, []);
   const [speechBubbles, setSpeechBubbles] = useState<SpeechBubbleItem[]>([]);
   const [screenHeadPositions, setScreenHeadPositions] = useState<
-    Record<number, { x: number; y: number }>
+    Record<string, { x: number; y: number }>
   >({});
 
   // Cycle Gizmo Mode: Mover -> Escalar -> Rotação -> Mover...
@@ -581,6 +581,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
       id: `bubble-${Date.now()}`,
       text,
       spotId: currentSpotId,
+      senderId: 'self',
       userName: senderName,
       createdAt: Date.now(),
     };
@@ -645,6 +646,41 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
         setRemotePlayers(playersList);
       })
+      .on('broadcast', { event: 'player-state' }, ({ payload }) => {
+        if (
+          !payload ||
+          typeof payload.senderSessionId !== 'string' ||
+          payload.senderSessionId === tabSessionId
+        ) {
+          return;
+        }
+        const position =
+          Array.isArray(payload.position) &&
+          payload.position.length >= 3 &&
+          payload.position.slice(0, 3).every((value: unknown) => Number.isFinite(Number(value)))
+            ? (payload.position.slice(0, 3).map(Number) as [number, number, number])
+            : undefined;
+        const remotePlayer: {
+          userId: string;
+          displayName: string;
+          spotId: number;
+          position?: [number, number, number];
+        } = {
+          userId: payload.senderSessionId,
+          displayName: typeof payload.displayName === 'string' ? payload.displayName : 'Usuário',
+          spotId: Number.isFinite(Number(payload.spotId)) ? Number(payload.spotId) : 1,
+          position,
+        };
+        setRemotePlayers((currentPlayers) => {
+          const existingIndex = currentPlayers.findIndex(
+            (player) => player.userId === remotePlayer.userId
+          );
+          if (existingIndex < 0) return [...currentPlayers, remotePlayer];
+          return currentPlayers.map((player, index) =>
+            index === existingIndex ? { ...player, ...remotePlayer } : player
+          );
+        });
+      })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         if (
           payload &&
@@ -674,6 +710,10 @@ export const RoomView: React.FC<RoomViewProps> = ({
                 id: `bubble-${message.id}`,
                 text: message.text,
                 spotId: message.spotId,
+                senderId:
+                  typeof payload.senderSessionId === 'string'
+                    ? payload.senderSessionId
+                    : undefined,
                 userName: message.user || 'Usuário',
                 createdAt: Date.now(),
               },
@@ -709,6 +749,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
                 thumb: liveAvatar.thumb,
                 assetId:
                   liveAvatar.assetId ||
+                  extractAssetUuid(liveAvatar.originalItemId) ||
                   extractAssetUuid(liveAvatar.fileBlobUrl) ||
                   undefined,
                 fileBlobUrl:
@@ -720,6 +761,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
             : null,
           customAvatarAssetId:
             effectiveCustomAvatarObject?.assetId ||
+            extractAssetUuid((effectiveCustomAvatarObject as any)?.asset_url) ||
+            extractAssetUuid((effectiveCustomAvatarObject as any)?.url) ||
             extractAssetUuid(effectiveCustomAvatarObject?.fileBlobUrl) ||
             undefined,
           customAvatarUrl: stableCustomAvatarUrl,
@@ -808,6 +851,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
               thumb: liveAvatar.thumb,
               assetId:
                 liveAvatar.assetId ||
+                extractAssetUuid(liveAvatar.originalItemId) ||
                 extractAssetUuid(liveAvatar.fileBlobUrl) ||
                 undefined,
               fileBlobUrl:
@@ -819,6 +863,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
           : null,
         customAvatarAssetId:
           effectiveCustomAvatarObject?.assetId ||
+          extractAssetUuid((effectiveCustomAvatarObject as any)?.asset_url) ||
+          extractAssetUuid((effectiveCustomAvatarObject as any)?.url) ||
           extractAssetUuid(effectiveCustomAvatarObject?.fileBlobUrl) ||
           undefined,
         pose: selectedPose,
@@ -827,6 +873,33 @@ export const RoomView: React.FC<RoomViewProps> = ({
       });
     }
   }, [currentSpotId, playerPosition, liveAvatar, selectedPose, tabSessionId, effectiveCustomAvatarObject, isShopping, user?.displayName]);
+
+  const handlePlayerPositionChange = (position: [number, number, number]) => {
+    setPlayerPosition(position);
+    if (!roomChannelRef.current || !roomChannelReadyRef.current) return;
+    const channel = roomChannelRef.current;
+    void channel
+      .send({
+        type: 'broadcast',
+        event: 'player-state',
+        payload: {
+          senderSessionId: tabSessionId,
+          displayName: user?.displayName || 'Visitante',
+          spotId: currentSpotId,
+          position,
+        },
+      })
+      .then((status: string) => {
+        if (status !== 'ok' && roomChannelRef.current === channel) {
+          console.warn(`Falha ao transmitir a posição do jogador: ${status}`);
+        }
+      })
+      .catch((error: unknown) => {
+        if (roomChannelRef.current === channel) {
+          console.warn('Falha ao transmitir a posição do jogador:', error);
+        }
+      });
+  };
 
   // Clean up speech bubbles after 7 seconds
   useEffect(() => {
@@ -851,7 +924,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
           freeMoveEnabled={freeMoveEnabled}
           clickSpotsEnabled={clickSpotsEnabled}
           movementDuration={movementDuration}
-          onPlayerPositionChange={setPlayerPosition}
+          onPlayerPositionChange={handlePlayerPositionChange}
           cameraMode={cameraMode}
           cameraControl={cameraControl}
           equippedAccessories={equippedAccessories}

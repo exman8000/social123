@@ -303,6 +303,7 @@ export interface SpeechBubbleItem {
   id: string;
   text: string;
   spotId: number;
+  senderId?: string;
   userName: string;
   createdAt: number;
 }

@@ -36,7 +36,7 @@ interface LoungeCanvas3DProps {
   onPlayerPositionChange?: (position: [number, number, number]) => void;
   cameraMode: 'orbit' | 'frontal' | 'closeup' | 'topdown';
   equippedAccessories?: any[];
-  onUpdateAvatarHeadScreenPos?: (positions: Record<number, { x: number; y: number }>) => void;
+  onUpdateAvatarHeadScreenPos?: (positions: Record<string, { x: number; y: number }>) => void;
   editorRoom?: RoomEditorState;
   showSpotArrows?: boolean;
   activeUserAvatar?: StoreAvatar | null;
@@ -86,7 +86,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const headPosRef = useRef<Record<number, THREE.Vector3>>({});
+  const headPosRef = useRef<Record<string, THREE.Vector3>>({});
   const animationFrameRef = useRef<number>(0);
   const spotClickablesGroupRef = useRef<THREE.Group | null>(null);
   const spotVisualConfigRef = useRef<SpotVisualConfig | undefined>(spotVisualConfig);
@@ -669,9 +669,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 
     // Track head positions in 3D for speech bubble placement
     headPosRef.current = {
-      1: new THREE.Vector3(-1.45, 1.25, 0),
-      2: new THREE.Vector3(0, 1.25, 0.2),
-      3: new THREE.Vector3(1.45, 1.25, 0),
+      self: new THREE.Vector3(0, 1.25, 0.2),
     };
 
     // Render loop
@@ -750,7 +748,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         // Project 3D head positions to 2D screen coordinates
         if (onUpdateAvatarHeadScreenPos && container) {
           const rect = container.getBoundingClientRect();
-          const screenPosMap: Record<number, { x: number; y: number }> = {};
+          const screenPosMap: Record<string, { x: number; y: number }> = {};
 
           // Update player head position based on actual player avatar position in 3D
           if (playerGroupRef.current) {
@@ -759,7 +757,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             // Position bubble directly over top of avatar head
             const headHeight = 1.30 * (transform.scale || 1.0) * (transform.sizeY || 1.0);
             playerWorldHead.y += headHeight;
-            headPosRef.current[currentSpotIdRef.current] = playerWorldHead;
+            headPosRef.current.self = playerWorldHead;
           }
 
           Object.entries(headPosRef.current).forEach(([idStr, vec3]) => {
@@ -768,7 +766,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             if (tempVec.z < 1) {
               const screenX = ((tempVec.x + 1) / 2) * rect.width;
               const screenY = ((-tempVec.y + 1) / 2) * rect.height;
-              screenPosMap[Number(idStr)] = { x: screenX, y: screenY };
+              screenPosMap[idStr] = { x: screenX, y: screenY };
             }
           });
 
@@ -915,7 +913,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               );
           container.position.lerp(target, 0.12);
           container.rotation.y = THREE.MathUtils.degToRad(spot.rotation || 0);
-          headPosRef.current[remote.spotId] = new THREE.Vector3(
+          headPosRef.current[String(remote.userId)] = new THREE.Vector3(
             container.position.x,
             container.position.y +
               (remote.pose?.glbKey?.includes('sit') || (spot as any).type === 'sentar'
@@ -1818,7 +1816,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 
         // Store remote player head position in 3D for floating SpeechBubbleOverlay projection
         const headHeight = isSeated ? 1.0 : 1.45;
-        headPosRef.current[player.spotId] = new THREE.Vector3(posX, posY + headHeight, posZ);
+        headPosRef.current[String(player.userId)] = new THREE.Vector3(posX, posY + headHeight, posZ);
 
         const fallbackAvatar = new THREE.Group();
         const fallbackMaterial = new THREE.MeshStandardMaterial({

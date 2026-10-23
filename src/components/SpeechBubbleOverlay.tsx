@@ -4,7 +4,7 @@ import { ObjectAction, SpeechBubbleItem, StoreAvatar, CreatorUser } from '../typ
 
 interface SpeechBubbleOverlayProps {
   bubbles: SpeechBubbleItem[];
-  screenPositions: Record<number, { x: number; y: number }>;
+  screenPositions: Record<string, { x: number; y: number }>;
   currentSpotId?: number;
   activeUserAvatar?: StoreAvatar | null;
   user?: CreatorUser | null;
@@ -34,8 +34,8 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
     activeUserAvatar?.thumb ||
     'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80';
 
-  const getSpotInfo = (spotId: number) => {
-    const isPlayer = String(spotId) === String(currentSpotId);
+  const getSpotInfo = (speakerId: string) => {
+    const isPlayer = speakerId === 'self';
     if (isPlayer) {
       return {
         name: user?.displayName ? `Você (${user.displayName})` : 'Você',
@@ -47,7 +47,9 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
 
     // Check if there is a remote player occupying this spotId
     const remoteUser = remotePlayers.find(
-      (p) => String(p.spotId) === String(spotId)
+      (player) =>
+        String(player.userId) === speakerId ||
+        (!speakerId.startsWith('sess-') && String(player.spotId) === speakerId)
     );
 
     if (remoteUser) {
@@ -60,7 +62,7 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
         defaultUserPhoto;
 
       return {
-        name: remoteUser.displayName || `Usuário ${spotId}`,
+        name: remoteUser.displayName || `Usuário ${remoteUser.spotId}`,
         photo: userPhoto,
         isPlayer: false,
         isRemoteUser: true,
@@ -73,17 +75,23 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
 
   return (
     <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
-      {Object.entries(screenPositions).map(([spotKey, pos]) => {
-        const spotId = Number(spotKey);
+      {Object.entries(screenPositions).map(([speakerId, pos]) => {
         if (!pos) return null;
 
-        const info = getSpotInfo(spotId);
+        const info = getSpotInfo(speakerId);
         if (!info) return null;
-        const bubble = bubbles.find((b) => b.spotId === spotId);
+        const bubble =
+          bubbles.find((item) => item.senderId === speakerId) ||
+          bubbles.find(
+            (item) =>
+              !item.senderId &&
+              !speakerId.startsWith('sess-') &&
+              item.spotId === Number(speakerId)
+          );
 
         return (
           <div
-            key={`avatar-overlay-${spotId}`}
+            key={`avatar-overlay-${speakerId}`}
             className="absolute transform -translate-x-1/2 -translate-y-full transition-all duration-150 ease-out select-none flex flex-col items-center pointer-events-none"
             style={{
               left: `${pos.x}px`,
