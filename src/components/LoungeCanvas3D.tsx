@@ -147,6 +147,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const previousGizmoSpotIdRef = useRef(currentSpotId);
   const previousGizmoAngleRef = useRef(transform.angle);
   const lastPositionReportAtRef = useRef(0);
+  const lastReportedPlayerPositionRef = useRef<THREE.Vector3 | null>(null);
   const remotePlayersRef = useRef(remotePlayers || []);
   remotePlayersRef.current = remotePlayers || [];
   const onPlayerPositionChangeRef = useRef(onPlayerPositionChange);
@@ -169,7 +170,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const remotePlayerSceneKey = (remotePlayers || [])
     .map(
       (player) =>
-        `${player.userId}:${player.spotId || ''}:${player.position?.join(',') || ''}:${player.avatar?.id || ''}:${player.avatar?.assetId || ''}:${player.avatar?.fileBlobUrl || ''}:${player.avatar?.asset_url || ''}:${player.avatar?.url || ''}:${player.customAvatarAssetId || ''}:${player.customAvatarUrl || ''}:${player.pose?.id || ''}`
+        `${player.userId}:${player.displayName || ''}:${player.avatar?.id || ''}:${player.avatar?.assetId || ''}:${player.avatar?.fileBlobUrl || ''}:${player.avatar?.asset_url || ''}:${player.avatar?.url || ''}:${player.customAvatarAssetId || ''}:${player.customAvatarUrl || ''}:${player.avatarUrl || ''}:${player.pose?.id || ''}:${player.pose?.glbKey || ''}`
     )
     .join('|');
 
@@ -778,13 +779,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       // Free movement takes priority over spot-based movement while enabled.
       if (freeMoveEnabledRef.current && playerGroupRef.current) {
         const movement = movementTargetRef.current;
-        let shouldReportPosition = false;
         if (movement) {
           const elapsed = Math.max(0, (performance.now() - movement.startedAt) / 1000);
           const progress = Math.min(1, elapsed / Math.max(0.5, movementDurationRef.current));
           const easedProgress = progress * progress * (3 - 2 * progress);
           playerGroupRef.current.position.lerpVectors(movement.from, movement.to, easedProgress);
-          shouldReportPosition = time - lastPositionReportAtRef.current >= 0.18;
           const direction = movement.to.clone().sub(movement.from);
           if (direction.lengthSq() > 0.0001) {
             playerGroupRef.current.rotation.y = Math.atan2(direction.x, direction.z);
@@ -793,23 +792,9 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             playerGroupRef.current.position.copy(movement.to);
             freeMoveHoldRef.current = movement.to.clone();
             movementTargetRef.current = null;
-            shouldReportPosition = true;
           }
         } else if (freeMoveHoldRef.current) {
           playerGroupRef.current.position.copy(freeMoveHoldRef.current);
-        }
-
-        if (
-          shouldReportPosition &&
-          onPlayerPositionChangeRef.current
-        ) {
-          const position = playerGroupRef.current.position;
-          onPlayerPositionChangeRef.current([
-            Number(position.x.toFixed(3)),
-            Number(position.y.toFixed(3)),
-            Number(position.z.toFixed(3)),
-          ]);
-          lastPositionReportAtRef.current = time;
         }
       } else if (editorRoom?.spots && playerGroupRef.current) {
         const activeEditorSpot =
@@ -997,6 +982,28 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         }
       } else if (!avatarAction) {
         activeAvatarActionStartRef.current.actionId = null;
+      }
+
+      if (playerGroupRef.current && onPlayerPositionChangeRef.current) {
+        const position = playerGroupRef.current.position;
+        const lastPosition = lastReportedPlayerPositionRef.current;
+        const moved =
+          !lastPosition ||
+          position.distanceToSquared(lastPosition) > 0.0004;
+        if (moved && time - lastPositionReportAtRef.current >= 0.18) {
+          const reportedPosition = new THREE.Vector3(
+            Number(position.x.toFixed(3)),
+            Number(position.y.toFixed(3)),
+            Number(position.z.toFixed(3))
+          );
+          onPlayerPositionChangeRef.current([
+            reportedPosition.x,
+            reportedPosition.y,
+            reportedPosition.z,
+          ]);
+          lastReportedPlayerPositionRef.current = reportedPosition;
+          lastPositionReportAtRef.current = time;
+        }
       }
 
       // Move any parent placedObjects in editorRoom that have motion configured
@@ -1732,22 +1739,34 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const poseGlbKey = player.pose?.glbKey || 'stand';
         const isSeated = poseGlbKey.includes('sit') || (spot as any).type === 'sentar';
 
-        const directAvatarUrl = [
-          player.avatar?.fileBlobUrl,
-          player.avatar?.asset_url,
-          player.avatar?.url,
-          player.customAvatarUrl,
-          player.avatarUrl,
-        ].find(
-          (url) => typeof url === 'string' && /^https?:\/\//i.test(url)
-        ) as string | undefined;
-        const avatarAssetId =
-          player.avatar?.assetId ||
-          player.customAvatarAssetId ||
-          extractAssetUuid(player.avatar?.asset_url) ||
-          extractAssetUuid(player.avatar?.fileBlobUrl) ||
-          extractAssetUuid(player.avatar?.url) ||
-          extractAssetUuid(player.customAvatarUrl);
+        const avatarUrls = [
+          ...new Set(
+            [
+              player.avatar?.fileBlobUrl,
+              player.avatar?.asset_url,
+              player.avatar?.url,
+              player.customAvatarUrl,
+              player.avatarUrl,
+            ].filter(
+              (url): url is string =>
+                typeof url === 'string' && /^https?:\/\//i.test(url)
+            )
+          ),
+        ];
+        const avatarAssetIds = [
+          ...new Set(
+            [
+              player.avatar?.assetId,
+              player.customAvatarAssetId,
+              extractAssetUuid(player.avatar?.asset_url),
+              extractAssetUuid(player.avatar?.fileBlobUrl),
+              extractAssetUuid(player.avatar?.url),
+              extractAssetUuid(player.customAvatarUrl),
+            ]
+              .map((candidate) => extractAssetUuid(candidate))
+              .filter((assetId): assetId is string => Boolean(assetId))
+          ),
+        ];
         const playerContainer = new THREE.Group();
         const remotePosition = player.position;
         playerContainer.position.set(
@@ -1821,8 +1840,30 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         fallbackAvatar.add(head);
         playerContainer.add(fallbackAvatar);
 
+        const loader = new GLTFLoader();
+        let directUrlIndex = 0;
+        let assetIdIndex = 0;
+
+        const tryNextAvatarSource = async (): Promise<void> => {
+          if (playerContainer.parent !== group) return;
+          const nextDirectUrl = avatarUrls[directUrlIndex++];
+          if (nextDirectUrl) {
+            loadAvatar(nextDirectUrl);
+            return;
+          }
+
+          while (assetIdIndex < avatarAssetIds.length) {
+            const assetId = avatarAssetIds[assetIdIndex++];
+            const resolvedUrl = await resolveAssetDownloadUrl(assetId, editorRoom?.id);
+            if (playerContainer.parent !== group) return;
+            if (resolvedUrl) {
+              loadAvatar(resolvedUrl);
+              return;
+            }
+          }
+        };
+
         const loadAvatar = (avatarGlbUrl: string) => {
-          const loader = new GLTFLoader();
           loader.load(
             avatarGlbUrl,
             (gltf) => {
@@ -1845,19 +1886,13 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             undefined,
             (err) => {
               console.warn('Could not load remote player GLB model:', err);
+              void tryNextAvatarSource();
             }
           );
         };
 
-        if (directAvatarUrl) {
-          loadAvatar(directAvatarUrl);
-        } else if (avatarAssetId) {
-          void resolveAssetDownloadUrl(avatarAssetId, editorRoom?.id).then((url) => {
-            if (url && playerContainer.parent === group) loadAvatar(url);
-          });
-        }
-
         group.add(playerContainer);
+        void tryNextAvatarSource();
       });
     }
   }, [remotePlayerSceneKey, spots]);
