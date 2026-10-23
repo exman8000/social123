@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Sparkles,
   X,
@@ -11,6 +12,7 @@ import {
   Check,
   Zap,
   User,
+  PersonStanding,
   SlidersHorizontal,
   Flame,
 } from 'lucide-react';
@@ -35,6 +37,7 @@ interface UnifiedRoomInventoryProps {
   // Mobile dock mode: opened/closed by the parent dock, always horizontal
   embedded?: boolean;
   onClose?: () => void;
+  initialTab?: 'atalhos' | 'poses' | 'avatars' | 'actions';
 }
 
 export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
@@ -55,6 +58,7 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
   onToggleAvatarAction,
   embedded = false,
   onClose,
+  initialTab,
 }) => {
   // Orientation: horizontal (bottom bar) or vertical (side dock)
   const [orientationState, setOrientation] = useState<'horizontal' | 'vertical'>(() => {
@@ -76,7 +80,14 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
   };
 
   // Active Tab inside unified inventory: 'atalhos' | 'poses' | 'avatars'
-  const [activeTab, setActiveTab] = useState<'atalhos' | 'poses' | 'avatars' | 'actions'>('atalhos');
+  const [activeTab, setActiveTab] = useState<'atalhos' | 'poses' | 'avatars' | 'actions'>(
+    initialTab || 'atalhos'
+  );
+  const [poseSwitchRequest, setPoseSwitchRequest] = useState<{
+    pose: AvatarPose;
+    avatar: StoreAvatar;
+  } | null>(null);
+  const [poseAccessError, setPoseAccessError] = useState<string | null>(null);
   // Collapsed by default on small screens so the 3D scene stays interactive
   const [isCollapsed, setIsCollapsed] = useState<boolean>(
     () => typeof window !== 'undefined' && window.innerWidth < 640
@@ -85,6 +96,10 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
   // Drag and drop states for hotbar slots
   const [draggedSlotIndex, setDraggedSlotIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
 
   // Pad 8 slots for quick access
   const fullSlots: Array<RoomAccessSlot | null> = Array.from({ length: 8 }, (_, idx) => {
@@ -212,74 +227,69 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
     }
   };
 
-  // Filter poses visible for current active avatar (only correlated poses or universal)
-  const visiblePoses = poses.filter((pose: any) => {
-    if (!activeUserAvatar) return true;
-    const isUniversal =
-      (!pose.associatedAvatarIds || pose.associatedAvatarIds.length === 0) &&
-      (!pose.associatedAvatarNames || pose.associatedAvatarNames.length === 0) &&
-      !pose.pendingAvatarKey &&
-      !pose.pendingAvatarName;
-    if (isUniversal) return true;
-
-    const avId = activeUserAvatar.id;
-    const avName = (activeUserAvatar.name || '').toLowerCase().trim();
-    const avOrig = (activeUserAvatar.originalItemId || '').toLowerCase().trim();
-    const avAsset = (activeUserAvatar.assetId || '').toLowerCase().trim();
-
-    if (pose.associatedAvatarIds && pose.associatedAvatarIds.length > 0) {
-      if (pose.associatedAvatarIds.includes(avId)) return true;
-      if (avOrig && pose.associatedAvatarIds.includes(avOrig)) return true;
-      if (avAsset && pose.associatedAvatarIds.includes(avAsset)) return true;
-    }
-    if (pose.associatedAvatarNames && pose.associatedAvatarNames.length > 0) {
-      if (pose.associatedAvatarNames.some((n: string) => n.toLowerCase().trim() === avName)) return true;
-    }
-    if (pose.pendingAvatarKey) {
-      const k = pose.pendingAvatarKey.toLowerCase().trim();
-      if (k === avId.toLowerCase() || (avOrig && k === avOrig) || (avAsset && k === avAsset)) return true;
-    }
-    if (pose.pendingAvatarName && pose.pendingAvatarName.toLowerCase().trim() === avName) return true;
-
-    return false;
-  });
+  const visiblePoses = poses;
 
   const handleSelectPoseWithAvatarSwitch = (pose: AvatarPose) => {
-    const rawPose = pose as any;
-    if (activeUserAvatar && onSelectAvatar && storeAvatars.length > 0) {
-      const isUniversal =
-        (!rawPose.associatedAvatarIds || rawPose.associatedAvatarIds.length === 0) &&
-        (!rawPose.associatedAvatarNames || rawPose.associatedAvatarNames.length === 0) &&
-        !rawPose.pendingAvatarKey &&
-        !rawPose.pendingAvatarName;
-      if (!isUniversal) {
-        const targetAvatar = storeAvatars.find((a) => {
-          const avId = a.id;
-          const avName = (a.name || '').toLowerCase().trim();
-          const avOrig = (a.originalItemId || '').toLowerCase().trim();
-          const avAsset = (a.assetId || '').toLowerCase().trim();
-          if (rawPose.associatedAvatarIds?.length) {
-            if (rawPose.associatedAvatarIds.includes(avId)) return true;
-            if (avOrig && rawPose.associatedAvatarIds.includes(avOrig)) return true;
-            if (avAsset && rawPose.associatedAvatarIds.includes(avAsset)) return true;
-          }
-          if (rawPose.associatedAvatarNames?.length) {
-            if (rawPose.associatedAvatarNames.some((n: string) => n.toLowerCase().trim() === avName)) return true;
-          }
-          if (rawPose.pendingAvatarKey) {
-            const k = rawPose.pendingAvatarKey.toLowerCase().trim();
-            if (k === avId.toLowerCase() || (avOrig && k === avOrig) || (avAsset && k === avAsset)) return true;
-          }
-          if (rawPose.pendingAvatarName && rawPose.pendingAvatarName.toLowerCase().trim() === avName) return true;
-          return false;
-        });
-        if (targetAvatar && targetAvatar.id !== activeUserAvatar.id) {
-          onSelectAvatar(targetAvatar);
-          if (onShowToast) onShowToast(`👤 Avatar alternado para "${targetAvatar.name}" para aplicar a pose.`);
-        }
-      }
+    setPoseAccessError(null);
+    if (pose.access === 'free') {
+      onSelectPose(pose);
+      return;
     }
-    onSelectPose(pose);
+    const associatedIds = [
+      ...(pose.associatedAvatarIds || []),
+      ...(pose.pendingAvatarKey ? [pose.pendingAvatarKey] : []),
+    ].map((id) => id.toLowerCase().trim());
+    const associatedNames = [
+      ...(pose.associatedAvatarNames || []),
+      ...(pose.pendingAvatarName ? [pose.pendingAvatarName] : []),
+    ].map((name) => name.toLowerCase().trim());
+    if (associatedIds.length === 0 && associatedNames.length === 0) {
+      onSelectPose(pose);
+      return;
+    }
+
+    const matchesAvatar = (avatar: StoreAvatar | null | undefined) => {
+      if (!avatar) return false;
+      const avatarIds = [avatar.id, avatar.originalItemId, avatar.assetId]
+        .filter((id): id is string => Boolean(id))
+        .map((id) => id.toLowerCase().trim());
+      return (
+        associatedIds.some((id) => avatarIds.includes(id)) ||
+        associatedNames.includes(avatar.name.toLowerCase().trim())
+      );
+    };
+
+    if (matchesAvatar(activeUserAvatar)) {
+      onSelectPose(pose);
+      return;
+    }
+
+    const targetAvatar = storeAvatars.find(
+      (avatar) =>
+        matchesAvatar(avatar) &&
+        (avatar.owned || avatar.applied || avatar.id === activeAvatarId)
+    );
+    if (!targetAvatar) {
+      setPoseAccessError('Compre primeiro o avatar anexado a esta pose para poder aplicá-la.');
+      return;
+    }
+    if (!onSelectAvatar) {
+      setPoseAccessError('Não foi possível trocar para o avatar exigido por esta pose.');
+      return;
+    }
+    if (targetAvatar.id === activeUserAvatar?.id) {
+      onSelectPose(pose);
+      return;
+    }
+    setPoseSwitchRequest({ pose, avatar: targetAvatar });
+  };
+
+  const confirmPoseAvatarSwitch = () => {
+    if (!poseSwitchRequest || !onSelectAvatar) return;
+    onSelectAvatar(poseSwitchRequest.avatar);
+    onSelectPose(poseSwitchRequest.pose);
+    onShowToast?.(`Avatar "${poseSwitchRequest.avatar.name}" aplicado com a pose.`);
+    setPoseSwitchRequest(null);
   };
 
   // Minimized Floating Pill Mode
@@ -529,13 +539,24 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
 
       {/* CONTENT TAB 2: POSES CATALOG */}
       {activeTab === 'poses' && (
-        <div
-          className={`${
-            orientation === 'horizontal'
-              ? 'flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 max-h-36 scrollbar-thin scrollbar-thumb-zinc-700'
-              : 'grid grid-cols-2 gap-2 overflow-y-auto max-h-[60vh] pr-1 scrollbar-thin scrollbar-thumb-zinc-700'
-          }`}
-        >
+        <div className="flex min-h-0 flex-col gap-2">
+          {poseAccessError && (
+            <p role="alert" className="rounded-lg border border-red-500/50 bg-red-950/70 px-3 py-2 text-xs font-semibold text-red-200">
+              {poseAccessError}
+            </p>
+          )}
+          <div
+            className={`${
+              orientation === 'horizontal'
+                ? 'flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 max-h-36 scrollbar-thin scrollbar-thumb-zinc-700'
+                : 'grid grid-cols-2 gap-2 overflow-y-auto max-h-[60vh] pr-1 scrollbar-thin scrollbar-thumb-zinc-700'
+            }`}
+          >
+          {visiblePoses.length === 0 && (
+            <div className="w-full py-6 text-center text-zinc-400 text-xs">
+              Nenhuma pose disponível no inventário.
+            </div>
+          )}
           {visiblePoses.map((pose) => {
             const isSelected = pose.id === selectedPoseId;
             const poseThumb =
@@ -560,12 +581,16 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
                 }`}
               >
                 <div className="relative w-full h-16 rounded-lg overflow-hidden bg-black/40">
-                  <img
-                    src={poseThumb}
-                    alt={pose.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                    referrerPolicy="no-referrer"
-                  />
+                  {poseThumb ? (
+                    <img
+                      src={poseThumb}
+                      alt={pose.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <PersonStanding className="mx-auto h-8 w-8 text-zinc-500" />
+                  )}
                   {isSelected && (
                     <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-[#ffd700] text-black flex items-center justify-center font-bold text-[9px]">
                       <Check className="w-3 h-3" />
@@ -590,6 +615,7 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
               </div>
             );
           })}
+          </div>
         </div>
       )}
 
@@ -719,6 +745,48 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
           </button>
         )}
       </div>
+      {poseSwitchRequest &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setPoseSwitchRequest(null);
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="pose-avatar-switch-title"
+              className="w-full max-w-sm rounded-2xl border border-amber-300/40 bg-[#14151c] p-5 shadow-2xl"
+            >
+              <h2 id="pose-avatar-switch-title" className="text-base font-bold text-white">
+                Trocar avatar para aplicar pose?
+              </h2>
+              <p className="mt-2 text-sm text-zinc-300">
+                A pose “{poseSwitchRequest.pose.name}” foi criada para o avatar “{poseSwitchRequest.avatar.name}”.
+                Quer trocar para esse avatar e aplicar a pose agora?
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPoseSwitchRequest(null)}
+                  className="rounded-xl border border-white/15 px-4 py-2 text-sm font-semibold text-zinc-200 hover:bg-white/10"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPoseAvatarSwitch}
+                  className="rounded-xl bg-amber-300 px-4 py-2 text-sm font-bold text-black hover:bg-amber-200"
+                >
+                  Sim, trocar e aplicar
+                </button>
+              </div>
+            </section>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

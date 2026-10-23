@@ -583,6 +583,24 @@ function buildRouter(): express.Router {
       }
 
       if (!isAuthorized && roomId) {
+        const publishedRoomCheck = await db.query(
+          `SELECT id
+             FROM public.showcase_rooms
+            WHERE id = $1::uuid
+              AND is_published = TRUE
+              AND (
+                asset_id = $2::uuid
+                OR model_url = $2::text
+                OR placed_objects @> $3::jsonb
+                OR placed_objects @> $4::jsonb
+              )
+            LIMIT 1`,
+          [roomId, assetId, JSON.stringify([{ assetId }]), JSON.stringify([{ asset_id: assetId }])]
+        );
+        isAuthorized = publishedRoomCheck.rows.length > 0;
+      }
+
+      if (!isAuthorized && roomId) {
         const roomCheck = await db.query(
           `SELECT id FROM public.room_placements
            WHERE room_id = $1 AND asset_id = $2 AND is_active = TRUE`,

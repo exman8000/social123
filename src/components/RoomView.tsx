@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins } from 'lucide-react';
+import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins, PersonStanding } from 'lucide-react';
 import {
   RoomData,
   AvatarPose,
@@ -29,6 +29,7 @@ import { safeLocalStorageSet } from '../lib/storageUtils';
 import { supabase } from '../lib/supabase';
 import { toggleRoomLike } from '../lib/database';
 import { RoomStoreProduct, RoomStoreShowroom3D } from './RoomStoreShowroom3D';
+import { extractAssetUuid } from '../lib/assetSyncClient';
 
 interface RoomViewProps {
   room: RoomData;
@@ -131,6 +132,13 @@ export const RoomView: React.FC<RoomViewProps> = ({
         (v): v is string => Boolean(v)
       )
     );
+    const linkedAvatarNames = objs
+      .filter(
+        (object) =>
+          (object.isAvatar || object.type === 'avatar' || object.name.toLowerCase().includes('avatar')) &&
+          [object.id, object.assetId].some((id) => id && avatarKeys.has(id))
+      )
+      .map((object) => object.name);
     return objs
       .filter((o) => (o.type === 'pose' || o.isPose) && o.attachedAvatarIds?.some((id) => avatarKeys.has(id)))
       .map((o) => ({
@@ -141,7 +149,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
         assetId: o.assetId,
         fileBlobUrl: o.fileBlobUrl,
         owned: true,
-        access: 'free' as const,
+        associatedAvatarIds: o.attachedAvatarIds,
+        associatedAvatarNames: linkedAvatarNames,
+        access: 'requires_avatar' as const,
         isPublishedByCreator: false,
       }));
   }, [room.editorRoom, customAvatarObject, liveAvatar]);
@@ -160,6 +170,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
             isPublishedByCreator: p.isPublishedByCreator,
             associatedAvatarIds: p.associatedAvatarIds,
             associatedAvatarNames: p.associatedAvatarNames,
+            pendingAvatarKey: p.pendingAvatarKey,
+            pendingAvatarName: p.pendingAvatarName,
+            access: p.access,
             sourceObjectId: p.sourceObjectId,
             assetId: p.assetId,
             fileBlobUrl: p.fileBlobUrl,
@@ -180,11 +193,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
           associatedNames.some((name) => name.trim().toLowerCase() === avatarName))
       );
     };
-    const isCompatible = (pose: AvatarPose) =>
-      isLinkedToAvatar(pose) ||
-      (!(pose.associatedAvatarIds?.length || pose.associatedAvatarNames?.length));
     return [...base, ...attachedPoseExtras].filter(
-      (pose) => (pose.owned || Boolean(avatar?.owned && isLinkedToAvatar(pose))) && isCompatible(pose)
+      (pose) => pose.owned || Boolean(avatar?.owned && isLinkedToAvatar(pose))
     );
   }, [propPoses, attachedPoseExtras]);
 
@@ -281,6 +291,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
     if (slot.type === 'avatar') {
       const targetAvatar = storeAvatars.find((a) => a.id === slot.itemId) || slot.avatarData;
       if (targetAvatar) {
+        onSelectActiveAvatar?.(targetAvatar.id);
         setLiveAvatar(targetAvatar);
         showHudToast(`👤 Avatar alterado para "${targetAvatar.name}"!`);
       }
@@ -335,9 +346,11 @@ export const RoomView: React.FC<RoomViewProps> = ({
   // Chat & Speech Bubbles State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT);
   const [isMobile, setIsMobile] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.innerWidth < 640
+    () =>
+      typeof window !== 'undefined' &&
+      window.matchMedia('(max-width: 767px), (pointer: coarse)').matches
   );
-  const [mobilePanel, setMobilePanel] = useState<'chat' | 'inventory' | 'gizmo' | null>(null);
+  const [mobilePanel, setMobilePanel] = useState<'chat' | 'inventory' | 'poses' | 'gizmo' | null>(null);
   const [isStoreOpen, setIsStoreOpen] = useState(false);
   const [isStoreInventoryOpen, setIsStoreInventoryOpen] = useState(false);
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
@@ -488,9 +501,14 @@ export const RoomView: React.FC<RoomViewProps> = ({
     showHudToast('Este tipo de item não pode ser aplicado diretamente na sala.');
   };
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 640);
+    const mobileQuery = window.matchMedia('(max-width: 767px), (pointer: coarse)');
+    const onResize = () => setIsMobile(mobileQuery.matches);
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    mobileQuery.addEventListener('change', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      mobileQuery.removeEventListener('change', onResize);
+    };
   }, []);
   const [speechBubbles, setSpeechBubbles] = useState<SpeechBubbleItem[]>([]);
   const [screenHeadPositions, setScreenHeadPositions] = useState<
@@ -689,10 +707,21 @@ export const RoomView: React.FC<RoomViewProps> = ({
                 id: liveAvatar.id,
                 name: liveAvatar.name,
                 thumb: liveAvatar.thumb,
-                assetId: liveAvatar.assetId,
+                assetId:
+                  liveAvatar.assetId ||
+                  extractAssetUuid(liveAvatar.fileBlobUrl) ||
+                  undefined,
+                fileBlobUrl:
+                  typeof liveAvatar.fileBlobUrl === 'string' &&
+                  /^https?:\/\//i.test(liveAvatar.fileBlobUrl)
+                    ? liveAvatar.fileBlobUrl
+                    : undefined,
               }
             : null,
-          customAvatarAssetId: effectiveCustomAvatarObject?.assetId || undefined,
+          customAvatarAssetId:
+            effectiveCustomAvatarObject?.assetId ||
+            extractAssetUuid(effectiveCustomAvatarObject?.fileBlobUrl) ||
+            undefined,
           customAvatarUrl: stableCustomAvatarUrl,
           pose: selectedPose,
           activity: isShopping ? 'shopping' : 'room',
@@ -777,10 +806,21 @@ export const RoomView: React.FC<RoomViewProps> = ({
               id: liveAvatar.id,
               name: liveAvatar.name,
               thumb: liveAvatar.thumb,
-              assetId: liveAvatar.assetId,
+              assetId:
+                liveAvatar.assetId ||
+                extractAssetUuid(liveAvatar.fileBlobUrl) ||
+                undefined,
+              fileBlobUrl:
+                typeof liveAvatar.fileBlobUrl === 'string' &&
+                /^https?:\/\//i.test(liveAvatar.fileBlobUrl)
+                  ? liveAvatar.fileBlobUrl
+                  : undefined,
             }
           : null,
-        customAvatarAssetId: effectiveCustomAvatarObject?.assetId || undefined,
+        customAvatarAssetId:
+          effectiveCustomAvatarObject?.assetId ||
+          extractAssetUuid(effectiveCustomAvatarObject?.fileBlobUrl) ||
+          undefined,
         pose: selectedPose,
         customAvatarUrl: stableCustomUrl,
         activity: isShopping ? 'shopping' : 'room',
@@ -981,9 +1021,10 @@ export const RoomView: React.FC<RoomViewProps> = ({
       )}
 
       {/* SINGLE UNIFIED INVENTORY: Orientation toggleable (Horizontal at bottom / Vertical on left dock) */}
-      {(!isMobile || mobilePanel === 'inventory') && (
+      {(!isMobile || mobilePanel === 'inventory' || mobilePanel === 'poses') && (
       <UnifiedRoomInventory
         embedded={isMobile}
+        initialTab={mobilePanel === 'poses' ? 'poses' : mobilePanel === 'inventory' ? 'atalhos' : undefined}
         onClose={() => setMobilePanel(null)}
         slots={roomAccessSlots}
         onUpdateSlots={handleUpdateRoomAccessSlots}
@@ -994,6 +1035,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
         storeAvatars={storeAvatars}
         activeUserAvatar={liveAvatar}
         onSelectAvatar={(av) => {
+          onSelectActiveAvatar?.(av.id);
           setLiveAvatar(av);
           showHudToast(`👤 Avatar alterado para "${av.name}"!`);
         }}
@@ -1012,6 +1054,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
           {([
             ['chat', MessageSquare, 'Chat'],
             ['inventory', Package, 'Inventário'],
+            ['poses', PersonStanding, 'Poses'],
             ['gizmo', Move3d, 'Gizmo'],
             ['shop', Store, 'Loja'],
           ] as const).map(([key, Icon, label]) => (
@@ -1023,6 +1066,10 @@ export const RoomView: React.FC<RoomViewProps> = ({
                 else if (key === 'inventory') {
                   setIsStoreInventoryOpen((open) => !open);
                   setMobilePanel(null);
+                }
+                else if (key === 'poses') {
+                  setIsStoreInventoryOpen(false);
+                  setMobilePanel((current) => (current === 'poses' ? null : 'poses'));
                 }
                 else setMobilePanel((current) => (current === key ? null : key));
               }}

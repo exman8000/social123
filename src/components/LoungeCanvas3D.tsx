@@ -169,7 +169,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const remotePlayerSceneKey = (remotePlayers || [])
     .map(
       (player) =>
-        `${player.userId}:${player.avatar?.id || ''}:${player.avatar?.assetId || ''}:${player.customAvatarAssetId || ''}:${player.pose?.id || ''}`
+        `${player.userId}:${player.spotId || ''}:${player.position?.join(',') || ''}:${player.avatar?.id || ''}:${player.avatar?.assetId || ''}:${player.avatar?.fileBlobUrl || ''}:${player.avatar?.asset_url || ''}:${player.avatar?.url || ''}:${player.customAvatarAssetId || ''}:${player.customAvatarUrl || ''}:${player.pose?.id || ''}`
     )
     .join('|');
 
@@ -1735,6 +1735,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const directAvatarUrl = [
           player.avatar?.fileBlobUrl,
           player.avatar?.asset_url,
+          player.avatar?.url,
           player.customAvatarUrl,
           player.avatarUrl,
         ].find(
@@ -1744,6 +1745,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           player.avatar?.assetId ||
           player.customAvatarAssetId ||
           extractAssetUuid(player.avatar?.asset_url) ||
+          extractAssetUuid(player.avatar?.fileBlobUrl) ||
+          extractAssetUuid(player.avatar?.url) ||
           extractAssetUuid(player.customAvatarUrl);
         const playerContainer = new THREE.Group();
         const remotePosition = player.position;

@@ -241,7 +241,9 @@ export interface AvatarPose {
   isPublishedByCreator?: boolean;
   associatedAvatarIds?: string[];
   associatedAvatarNames?: string[];
-  access?: 'requires_avatar' | 'free';
+  pendingAvatarKey?: string;
+  pendingAvatarName?: string;
+  access?: PoseAccess;
 }
 
 export interface Spot {
