@@ -20,7 +20,7 @@ import { extractAssetUuid, resolveAssetDownloadUrl } from '../lib/assetSyncClien
 import { getActionMotionFactor } from '../lib/actionMotion';
 
 const MIN_CAMERA_RADIUS = 0.35;
-const MAX_CAMERA_RADIUS = 48;
+const MAX_CAMERA_RADIUS = 100;
 
 interface LoungeCanvas3DProps {
   currentPose: AvatarPose;
@@ -1448,11 +1448,22 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const gesture = touchGestureRef.current;
 
         if (gesture.pinchDistance > 0 && distance > 0) {
-          cameraAnglesRef.current.radius = THREE.MathUtils.clamp(
-            cameraAnglesRef.current.radius * (gesture.pinchDistance / distance),
+          const previousRadius = cameraAnglesRef.current.radius;
+          const zoomRatio = gesture.pinchDistance / distance;
+          const nextRadius = THREE.MathUtils.clamp(
+            previousRadius * Math.pow(zoomRatio, 1.35),
             MIN_CAMERA_RADIUS,
             MAX_CAMERA_RADIUS
           );
+          const zoomChange = Math.log(nextRadius / previousRadius);
+          cameraAnglesRef.current.radius = nextRadius;
+          if (zoomChange > 0) {
+            cameraAnglesRef.current.phi = THREE.MathUtils.clamp(
+              cameraAnglesRef.current.phi + zoomChange * 0.28,
+              -0.35,
+              1.40
+            );
+          }
           if (cameraRef.current) {
             const cam = cameraRef.current;
             const vFovRad = (cam.fov * Math.PI) / 180;
