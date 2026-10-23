@@ -29,7 +29,7 @@ interface RoomStoreShowroom3DProps {
   backLabel?: string;
 }
 
-const PAGE_SIZE = 3;
+const DESKTOP_PAGE_SIZE = 3;
 
 const disposeModel = (root: THREE.Object3D) => {
   root.traverse((object) => {
@@ -54,17 +54,34 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   backLabel = 'Voltar à sala',
 }) => {
   const canvasRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const modelSlotsRef = useRef<THREE.Group[]>([]);
+  const podiumsRef = useRef<THREE.Group[]>([]);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const [page, setPage] = useState(0);
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+  );
   const [loadedIds, setLoadedIds] = useState<Set<string>>(() => new Set());
   const [failedIds, setFailedIds] = useState<Set<string>>(() => new Set());
   const [retryCount, setRetryCount] = useState(0);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const pageSize = isMobile ? 1 : DESKTOP_PAGE_SIZE;
   const visibleProducts = useMemo(
-    () => products.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
-    [page, products]
+    () => products.slice(page * pageSize, page * pageSize + pageSize),
+    [page, pageSize, products]
   );
-  const pageCount = Math.ceil(products.length / PAGE_SIZE);
+  const pageCount = Math.ceil(products.length / pageSize);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 639px)');
+    const updateMobile = () => {
+      setIsMobile(media.matches);
+      setPage(0);
+    };
+    media.addEventListener('change', updateMobile);
+    return () => media.removeEventListener('change', updateMobile);
+  }, []);
 
   useEffect(() => {
     setPage((current) => Math.min(current, Math.max(0, pageCount - 1)));
@@ -83,6 +100,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     camera.lookAt(0, 1.2, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    rendererRef.current = renderer;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -117,6 +135,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     });
 
     modelSlotsRef.current = [];
+    podiumsRef.current = [];
     [-2.25, 0, 2.25].forEach((x) => {
       const podium = new THREE.Group();
       podium.position.x = x;
@@ -144,6 +163,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
       modelSlot.position.y = 0.42;
       podium.add(modelSlot);
       modelSlotsRef.current.push(modelSlot);
+      podiumsRef.current.push(podium);
       scene.add(podium);
     });
 
@@ -173,6 +193,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
       resizeObserver.disconnect();
       renderer.forceContextLoss();
       renderer.dispose();
+      rendererRef.current = null;
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           object.geometry.dispose();
@@ -182,8 +203,48 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
       });
       renderer.domElement.remove();
       modelSlotsRef.current = [];
+      podiumsRef.current = [];
     };
   }, []);
+
+  useEffect(() => {
+    podiumsRef.current.forEach((podium, index) => {
+      const isVisible = !isMobile || index === 0;
+      podium.visible = isVisible;
+      if (isVisible) podium.position.x = isMobile ? 0 : [-2.25, 0, 2.25][index];
+    });
+    const container = canvasRef.current;
+    const renderer = rendererRef.current;
+    if (container && renderer) {
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+  }, [isMobile, visibleProducts.length]);
+
+  const handleSwipeStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 1) {
+      swipeStartRef.current = null;
+      return;
+    }
+    if ((event.target as HTMLElement).closest('button, a, input')) {
+      swipeStartRef.current = null;
+      return;
+    }
+    const touch = event.touches[0];
+    if (touch) swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleSwipeEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!isMobile || !start || !touch) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    setPage((current) =>
+      Math.max(0, Math.min(pageCount - 1, current + (deltaX < 0 ? 1 : -1)))
+    );
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -286,7 +347,11 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
     ({ avatar: 'AVATAR', pose: 'POSE', accessory: 'ACESSÓRIO', item: 'ITEM' })[kind];
 
   return (
-    <div className="absolute inset-0 z-[60] overflow-hidden bg-[#0c0d12] text-white">
+    <div
+      className="absolute inset-0 z-[60] overflow-hidden bg-[#0c0d12] text-white"
+      onTouchStart={handleSwipeStart}
+      onTouchEnd={handleSwipeEnd}
+    >
       <div ref={canvasRef} className="absolute inset-0" aria-label="Vitrine 3D com três pedestais de itens publicados" />
 
       <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/75 to-transparent px-4 py-4 sm:px-8">
@@ -319,6 +384,9 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
       <div className="pointer-events-none absolute inset-x-0 top-[12%] z-10 text-center">
         <p className="text-[10px] font-bold uppercase tracking-[0.42em] text-[#f3c866]">Novidades da loja</p>
         <h2 className="mt-2 text-2xl font-black tracking-wide text-white drop-shadow-lg sm:text-4xl">VITRINE 3D</h2>
+        {isMobile && products.length > 1 && (
+          <p className="mt-1 text-[10px] text-zinc-300">Deslize para o lado para ver outros itens</p>
+        )}
       </div>
 
       {isLoading && (
@@ -340,7 +408,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
         </div>
       )}
 
-      <div className="absolute inset-x-0 bottom-[7%] z-10 flex items-end justify-center gap-2 px-2 sm:gap-6 sm:px-8">
+      <div className={`absolute inset-x-0 z-10 flex items-end justify-center gap-2 px-2 sm:gap-6 sm:px-8 ${isMobile ? 'bottom-[9%]' : 'bottom-[7%]'}`}>
         {visibleProducts.map((product) => {
           const isPurchasing = purchasingProductId === product.id;
           const modelLoading = !loadedIds.has(product.id);
@@ -349,7 +417,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
           return (
             <article
               key={product.id}
-              className="flex min-w-0 max-w-[22rem] flex-1 flex-col items-center rounded-2xl border border-[#f3c866]/25 bg-[#101116]/90 p-3 text-center shadow-[0_16px_55px_rgba(0,0,0,.6)] backdrop-blur-md sm:p-5"
+              className={`flex min-w-0 max-w-[22rem] flex-1 flex-col items-center rounded-2xl border border-[#f3c866]/25 bg-[#101116]/90 p-3 text-center shadow-[0_16px_55px_rgba(0,0,0,.6)] backdrop-blur-md sm:p-5 ${isMobile ? 'max-w-[90vw]' : ''}`}
             >
               <span className="rounded-full border border-[#f3c866]/30 bg-[#f3c866]/10 px-2.5 py-1 text-[9px] font-extrabold tracking-[0.18em] text-[#f3c866] sm:text-[10px]">
                 {productTypeLabel(product.kind)}
@@ -396,14 +464,30 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
                 {isPurchasing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Coins className="h-3.5 w-3.5" />}
                 {product.owned ? 'Adquirido' : isPurchasing ? 'Adquirindo…' : product.price === 0 ? 'Adquirir grátis' : `${product.price} créditos`}
               </button>
+              {purchaseError && (
+                <p role="alert" className="mt-2 w-full text-xs text-rose-200">
+                  {purchaseError}
+                </p>
+              )}
+              {!product.owned && !isPurchasing && (
+                <p className="mt-1 w-full text-[10px] text-zinc-400" aria-live="polite">
+                  {!isAuthenticated
+                    ? 'Entre na conta para adquirir'
+                    : product.price > 0 && coins === null
+                      ? 'Saldo ainda não carregado'
+                      : cannotAfford
+                        ? 'Saldo insuficiente'
+                        : ''}
+                </p>
+              )}
             </article>
           );
         })}
       </div>
 
-      {(purchaseError || !isAuthenticated) && (
+      {!isAuthenticated && (
         <div className={`absolute bottom-[1%] left-1/2 z-20 -translate-x-1/2 rounded-lg px-3 py-1.5 text-center text-[10px] sm:text-xs ${purchaseError ? 'bg-rose-950/90 text-rose-100' : 'bg-black/70 text-zinc-200'}`}>
-          {purchaseError || 'Entre na sua conta para adquirir itens.'}
+          Entre na sua conta para adquirir itens.
         </div>
       )}
 
