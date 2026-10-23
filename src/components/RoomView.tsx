@@ -567,13 +567,25 @@ export const RoomView: React.FC<RoomViewProps> = ({
       });
       void broadcast.then((status: string) => {
         if (status !== 'ok' && roomChannelRef.current === channel) {
+          console.warn('[Room realtime] Chat broadcast failed:', {
+            roomId: effectiveRoomId,
+            status,
+          });
           pendingChatMessagesRef.current.push(newMsg);
+          showHudToast(`Não foi possível enviar a mensagem (${status}). Ela será reenviada quando a sala reconectar.`);
         }
       }).catch(() => {
-        if (roomChannelRef.current === channel) pendingChatMessagesRef.current.push(newMsg);
+        if (roomChannelRef.current === channel) {
+          console.warn('[Room realtime] Chat broadcast rejected:', {
+            roomId: effectiveRoomId,
+          });
+          pendingChatMessagesRef.current.push(newMsg);
+          showHudToast('Falha de conexão ao enviar a mensagem. Ela será reenviada quando a sala reconectar.');
+        }
       });
     } else {
       pendingChatMessagesRef.current.push(newMsg);
+      showHudToast('Conectando ao chat da sala. A mensagem será enviada quando conectar.');
     }
 
     // Spawn 3D speech bubble above player's head
@@ -599,7 +611,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
   }, []);
 
   // Normalize channel name across all room ID variants
-  const effectiveRoomId = (room.editorRoomId || room.editorRoom?.id || room.id)
+  const effectiveRoomId = (room.editorRoom?.id || room.editorRoomId || room.id)
     .replace(/^(editor|playtest)-/, '');
 
   // Supabase Realtime Multiplayer Presence & Chat Synchronization
@@ -725,8 +737,15 @@ export const RoomView: React.FC<RoomViewProps> = ({
         if (roomChannelRef.current !== channel) return;
         if (status !== 'SUBSCRIBED') {
           roomChannelReadyRef.current = false;
+          console.warn('[Room realtime] Channel not subscribed:', {
+            roomId: effectiveRoomId,
+            status,
+          });
           return;
         }
+        console.info('[Room realtime] Connected:', {
+          roomId: effectiveRoomId,
+        });
         roomChannelReadyRef.current = true;
         const initialSpot = spots.find((spot) => spot.id === currentSpotId) || spots[0];
         const customAvatarUrl =
@@ -872,7 +891,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
         activity: isShopping ? 'shopping' : 'room',
       });
     }
-  }, [currentSpotId, playerPosition, liveAvatar, selectedPose, tabSessionId, effectiveCustomAvatarObject, isShopping, user?.displayName]);
+  }, [currentSpotId, liveAvatar, selectedPose, tabSessionId, effectiveCustomAvatarObject, isShopping, user?.displayName]);
 
   const handlePlayerPositionChange = (position: [number, number, number]) => {
     setPlayerPosition(position);
