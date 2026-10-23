@@ -216,6 +216,8 @@ export interface RoomMovementSettings {
   showSpotArrows: boolean;
   clickSpotsEnabled: boolean;
   freeMoveEnabled: boolean;
+  teleportOnSpotClick: boolean;
+  magneticSnapEnabled: boolean;
   movementDuration: number;
 }
 

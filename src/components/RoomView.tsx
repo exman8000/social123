@@ -341,7 +341,14 @@ export const RoomView: React.FC<RoomViewProps> = ({
     return 2;
   }); // Center puff is Player
   const [avatarFocusRequest, setAvatarFocusRequest] = useState(0);
-  const { freeMoveEnabled, movementDuration, showSpotArrows, clickSpotsEnabled } = movementSettings;
+  const {
+    freeMoveEnabled,
+    movementDuration,
+    showSpotArrows,
+    clickSpotsEnabled,
+    teleportOnSpotClick,
+    magneticSnapEnabled,
+  } = movementSettings;
   const cameraMode = 'orbit' as const;
 
   // Chat & Speech Bubbles State
@@ -997,6 +1004,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
           onSelectSpot={setCurrentSpotId}
           freeMoveEnabled={freeMoveEnabled}
           clickSpotsEnabled={clickSpotsEnabled}
+          teleportOnSpotClick={teleportOnSpotClick}
+          magneticSnapEnabled={magneticSnapEnabled}
           movementDuration={movementDuration}
           onPlayerPositionChange={handlePlayerPositionChange}
           cameraMode={cameraMode}

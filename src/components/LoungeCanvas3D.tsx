@@ -32,6 +32,8 @@ interface LoungeCanvas3DProps {
   onSelectSpot: (spotId: number) => void;
   freeMoveEnabled?: boolean;
   clickSpotsEnabled?: boolean;
+  teleportOnSpotClick?: boolean;
+  magneticSnapEnabled?: boolean;
   movementDuration?: number;
   onPlayerPositionChange?: (position: [number, number, number]) => void;
   cameraMode: 'orbit' | 'frontal' | 'closeup' | 'topdown';
@@ -58,6 +60,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   onSelectSpot,
   freeMoveEnabled = false,
   clickSpotsEnabled = true,
+  teleportOnSpotClick = false,
+  magneticSnapEnabled = false,
   movementDuration = 2,
   onPlayerPositionChange,
   cameraMode,
@@ -127,6 +131,10 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   freeMoveEnabledRef.current = freeMoveEnabled;
   const clickSpotsEnabledRef = useRef(clickSpotsEnabled);
   clickSpotsEnabledRef.current = clickSpotsEnabled;
+  const teleportOnSpotClickRef = useRef(teleportOnSpotClick);
+  teleportOnSpotClickRef.current = teleportOnSpotClick;
+  const magneticSnapEnabledRef = useRef(magneticSnapEnabled);
+  magneticSnapEnabledRef.current = magneticSnapEnabled;
   const movementDurationRef = useRef(movementDuration);
   movementDurationRef.current = movementDuration;
   const movementTargetRef = useRef<{
@@ -774,8 +782,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         }
       }
 
-      // Free movement takes priority over spot-based movement while enabled.
-      if (freeMoveEnabledRef.current && playerGroupRef.current) {
+      // Complete an active click-to-move even when free floor movement is disabled.
+      if (
+        playerGroupRef.current &&
+        (freeMoveEnabledRef.current || movementTargetRef.current || freeMoveHoldRef.current)
+      ) {
         const movement = movementTargetRef.current;
         if (movement) {
           const elapsed = Math.max(0, (performance.now() - movement.startedAt) / 1000);
@@ -791,7 +802,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             freeMoveHoldRef.current = movement.to.clone();
             movementTargetRef.current = null;
           }
-        } else if (freeMoveHoldRef.current) {
+        } else if (freeMoveEnabledRef.current && freeMoveHoldRef.current) {
           playerGroupRef.current.position.copy(freeMoveHoldRef.current);
         }
       } else if (editorRoom?.spots && playerGroupRef.current) {
@@ -1179,6 +1190,50 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         );
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, cameraRef.current);
+        const movePlayerTo = (target: THREE.Vector3, teleport = false) => {
+          const player = playerGroupRef.current;
+          if (!player) return;
+          const destination = target.clone();
+          if (teleport) {
+            movementTargetRef.current = null;
+            player.position.copy(destination);
+          } else {
+            movementTargetRef.current = {
+              from: player.position.clone(),
+              to: destination,
+              startedAt: performance.now(),
+            };
+          }
+          freeMoveHoldRef.current = destination;
+        };
+        const moveBesideBounds = (bounds: THREE.Box3, hitPoint?: THREE.Vector3) => {
+          const player = playerGroupRef.current;
+          if (!player || bounds.isEmpty()) return false;
+          const center = bounds.getCenter(new THREE.Vector3());
+          const halfSize = bounds.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+          const direction = new THREE.Vector2(player.position.x - center.x, player.position.z - center.z);
+          if (direction.lengthSq() < 0.0001 && hitPoint) {
+            direction.set(hitPoint.x - center.x, hitPoint.z - center.z);
+          }
+          if (direction.lengthSq() < 0.0001) direction.set(0, 1);
+          direction.normalize();
+          const projectedHalfExtent =
+            Math.abs(direction.x) * halfSize.x + Math.abs(direction.y) * halfSize.z;
+          const clearance = 0.48;
+          const boundaryX = Math.max(0.5, (editorRoom?.boundary?.x || 16) / 2 - 0.35);
+          const boundaryZ = Math.max(0.5, (editorRoom?.boundary?.z || 16) / 2 - 0.35);
+          const target = new THREE.Vector3(
+            THREE.MathUtils.clamp(center.x + direction.x * (projectedHalfExtent + clearance), -boundaryX, boundaryX),
+            player.position.y,
+            THREE.MathUtils.clamp(center.z + direction.y * (projectedHalfExtent + clearance), -boundaryZ, boundaryZ)
+          );
+          const nearestX = THREE.MathUtils.clamp(target.x, bounds.min.x, bounds.max.x);
+          const nearestZ = THREE.MathUtils.clamp(target.z, bounds.min.z, bounds.max.z);
+          if (Math.hypot(target.x - nearestX, target.z - nearestZ) < 0.38) return false;
+          movePlayerTo(target);
+          return true;
+        };
+
         const remoteGroup = remotePlayersGroupRef.current;
         const remoteHits = remoteGroup
           ? raycaster.intersectObjects(remoteGroup.children, true)
@@ -1197,6 +1252,24 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             (player) => player.userId === remoteUserId
           );
           if (remotePlayer) {
+            if (magneticSnapEnabledRef.current && playerGroupRef.current && remoteGroup) {
+              const remoteContainer = remoteGroup.children.find(
+                (child) => child.userData.remoteUserId === remoteUserId
+              );
+              const avatarVisual = remoteContainer?.children.find(
+                (child) => !(child instanceof THREE.Sprite)
+              );
+              if (avatarVisual) {
+                remoteGroup.updateMatrixWorld(true);
+                const avatarBounds = new THREE.Box3().setFromObject(avatarVisual);
+                if (moveBesideBounds(avatarBounds, remoteHits[0].point)) {
+                  cameraFocusUserIdRef.current = null;
+                  cameraFocusTargetRef.current = null;
+                  cameraPanOffsetRef.current.set(0, 0, 0);
+                  return;
+                }
+              }
+            }
             cameraFocusUserIdRef.current = remotePlayer.userId;
             cameraPanOffsetRef.current.set(0, 0, 0);
             cameraFocusTargetRef.current = new THREE.Vector3(
@@ -1237,7 +1310,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           cameraFocusTargetRef.current = null;
           cameraPanOffsetRef.current.set(0, 0, 0);
           const player = playerGroupRef.current;
-          if (freeMoveEnabledRef.current && player) {
+          if (player && (freeMoveEnabledRef.current || teleportOnSpotClickRef.current)) {
             const offset = transformRef.current.positionOffset;
             const target = new THREE.Vector3(
               clickedSpot.position[0] + (offset?.[0] || 0),
@@ -1246,12 +1319,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
                 (offset?.[1] || 0),
               clickedSpot.position[2] + (offset?.[2] || 0)
             );
-            movementTargetRef.current = {
-              from: player.position.clone(),
-              to: target,
-              startedAt: performance.now(),
-            };
-            freeMoveHoldRef.current = target.clone();
+            movePlayerTo(target, teleportOnSpotClickRef.current);
             onSelectSpotRef.current(clickedSpot.id);
           } else if (clickedSpot.id === currentSpotIdRef.current) {
             const hitPoint = intersects[0].point;
@@ -1276,6 +1344,40 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             onSelectSpotRef.current(clickedSpot.id);
           }
           return;
+        }
+
+        if (magneticSnapEnabledRef.current && playerGroupRef.current) {
+          const movableObjectIds = new Set(
+            (editorRoom?.placedObjects || [])
+              .filter((object) => object.type === 'movel' || object.type === 'objeto')
+              .map((object) => object.id)
+          );
+          const objectGroups = Array.from(placedObjectsMapRef.current.entries())
+            .filter(([id]) => movableObjectIds.has(id))
+            .map(([, group]) => group);
+          const objectHits = raycaster.intersectObjects(objectGroups, true);
+          if (objectHits.length > 0) {
+            let hitObject: THREE.Object3D | null = objectHits[0].object;
+            while (
+              hitObject &&
+              typeof hitObject.userData?.placedObjectId !== 'string' &&
+              hitObject.parent
+            ) {
+              hitObject = hitObject.parent;
+            }
+            const selectedObjectId = hitObject?.userData?.placedObjectId;
+            const selectedObject = (editorRoom?.placedObjects || []).find(
+              (object) => object.id === selectedObjectId
+            );
+            const selectedGroup = selectedObjectId
+              ? placedObjectsMapRef.current.get(selectedObjectId)
+              : undefined;
+            if (selectedObject && selectedGroup) {
+              selectedGroup.updateMatrixWorld(true);
+              const objectBounds = new THREE.Box3().setFromObject(selectedGroup);
+              if (moveBesideBounds(objectBounds, objectHits[0].point)) return;
+            }
+          }
         }
 
         if (freeMoveEnabledRef.current && playerGroupRef.current) {
@@ -1677,6 +1779,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       group.position.set(...object.position);
       group.rotation.set(...object.rotation);
       group.scale.set(...object.scale);
+      group.userData.placedObjectId = id;
       scene.add(group);
       placedObjectsMapRef.current.set(id, group);
 

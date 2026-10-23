@@ -105,6 +105,8 @@ const DEFAULT_ROOM_MOVEMENT_SETTINGS: RoomMovementSettings = {
   showSpotArrows: true,
   clickSpotsEnabled: true,
   freeMoveEnabled: true,
+  teleportOnSpotClick: false,
+  magneticSnapEnabled: false,
   movementDuration: 2,
 };
 
@@ -237,6 +239,14 @@ export const App: React.FC = () => {
         typeof savedSettings.freeMoveEnabled === 'boolean'
           ? savedSettings.freeMoveEnabled
           : DEFAULT_ROOM_MOVEMENT_SETTINGS.freeMoveEnabled,
+      teleportOnSpotClick:
+        typeof savedSettings.teleportOnSpotClick === 'boolean'
+          ? savedSettings.teleportOnSpotClick
+          : DEFAULT_ROOM_MOVEMENT_SETTINGS.teleportOnSpotClick,
+      magneticSnapEnabled:
+        typeof savedSettings.magneticSnapEnabled === 'boolean'
+          ? savedSettings.magneticSnapEnabled
+          : DEFAULT_ROOM_MOVEMENT_SETTINGS.magneticSnapEnabled,
       movementDuration: Number.isFinite(savedDuration)
         ? Math.max(0.5, Math.min(8, savedDuration))
         : DEFAULT_ROOM_MOVEMENT_SETTINGS.movementDuration,

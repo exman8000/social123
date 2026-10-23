@@ -643,7 +643,43 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
               />
             </label>
 
-            <div className={`rounded-xl border border-white/10 bg-white/5 p-3 ${movementSettings.freeMoveEnabled ? '' : 'opacity-50'}`}>
+            <label className="mb-4 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3">
+              <span>
+                <span className="block text-sm font-semibold">Teletransportar ao clicar no spot</span>
+                <span className="block text-xs text-zinc-400">Aparece imediatamente no spot, sem caminhar.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={movementSettings.teleportOnSpotClick}
+                onChange={(event) =>
+                  onMovementSettingsChange({
+                    ...movementSettings,
+                    teleportOnSpotClick: event.target.checked,
+                  })
+                }
+                className="h-4 w-4 accent-amber-400"
+              />
+            </label>
+
+            <label className="mb-4 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3">
+              <span>
+                <span className="block text-sm font-semibold">Encaixe magnético</span>
+                <span className="block text-xs text-zinc-400">Ao clicar em móveis ou pessoas, posiciona o avatar perto sem atravessar.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={movementSettings.magneticSnapEnabled}
+                onChange={(event) =>
+                  onMovementSettingsChange({
+                    ...movementSettings,
+                    magneticSnapEnabled: event.target.checked,
+                  })
+                }
+                className="h-4 w-4 accent-emerald-400"
+              />
+            </label>
+
+            <div className={`rounded-xl border border-white/10 bg-white/5 p-3 ${movementSettings.freeMoveEnabled || movementSettings.magneticSnapEnabled ? '' : 'opacity-50'}`}>
               <label htmlFor="lobby-movement-duration" className="mb-2 flex justify-between text-sm font-semibold">
                 <span>Tempo para chegar</span>
                 <span className="font-mono text-emerald-200">{movementSettings.movementDuration.toFixed(1)} s</span>
@@ -655,7 +691,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 max="8"
                 step="0.5"
                 value={movementSettings.movementDuration}
-                disabled={!movementSettings.freeMoveEnabled}
+                disabled={!movementSettings.freeMoveEnabled && !movementSettings.magneticSnapEnabled}
                 onChange={(event) =>
                   onMovementSettingsChange({
                     ...movementSettings,
