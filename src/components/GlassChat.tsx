@@ -11,10 +11,17 @@ import {
 } from 'lucide-react';
 import { ChatMessage } from '../types';
 
+interface ChatParticipant {
+  sessionId: string;
+  displayName: string;
+}
+
 interface GlassChatProps {
   roomName: string;
   messages: ChatMessage[];
-  onSendMessage: (text: string) => void;
+  participants: ChatParticipant[];
+  currentSessionId: string;
+  onSendMessage: (text: string, recipientSessionId?: string) => void;
   // Mobile dock mode: always expanded, closed by the parent dock
   embedded?: boolean;
   onClose?: () => void;
@@ -23,12 +30,37 @@ interface GlassChatProps {
 export const GlassChat: React.FC<GlassChatProps> = ({
   roomName,
   messages,
+  participants,
+  currentSessionId,
   onSendMessage,
   embedded = false,
   onClose,
 }) => {
   const [inputText, setInputText] = useState('');
+  const [whisperTarget, setWhisperTarget] = useState<ChatParticipant | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mentionMatch = inputText.match(/(?:^|\s)@([^\s@]*)$/);
+  const mentionQuery = mentionMatch?.[1].toLocaleLowerCase();
+  const mentionSuggestions = mentionQuery === undefined
+    ? []
+    : participants
+        .filter((participant) => participant.sessionId !== currentSessionId)
+        .filter((participant) => participant.displayName.toLocaleLowerCase().includes(mentionQuery))
+        .slice(0, 6);
+
+  useEffect(() => {
+    const latestMessage = messages[messages.length - 1];
+    if (
+      latestMessage?.isWhisper &&
+      latestMessage.recipientSessionId === currentSessionId &&
+      latestMessage.senderSessionId
+    ) {
+      setWhisperTarget({
+        sessionId: latestMessage.senderSessionId,
+        displayName: latestMessage.user,
+      });
+    }
+  }, [messages, currentSessionId]);
 
   // Minimization state: starts minimized on small mobile screens to keep the 3D room clean!
   const [isMinimizedState, setIsMinimized] = useState<boolean>(() => {
@@ -63,8 +95,17 @@ export const GlassChat: React.FC<GlassChatProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim()) return;
-    onSendMessage(inputText.trim());
+    onSendMessage(inputText.trim(), whisperTarget?.sessionId);
     setInputText('');
+  };
+
+  const selectWhisperTarget = (participant: ChatParticipant) => {
+    const nextText = inputText.replace(/(?:^|\s)@([^\s@]*)$/, (match) => {
+      const leadingSpace = match.startsWith(' ') ? ' ' : '';
+      return `${leadingSpace}@${participant.displayName} `;
+    });
+    setInputText(nextText);
+    setWhisperTarget(participant);
   };
 
   useEffect(() => {
@@ -266,9 +307,16 @@ export const GlassChat: React.FC<GlassChatProps> = ({
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-1 mb-0.5">
-                <span className="text-[11px] font-semibold text-[#facc15] tracking-wide truncate">
-                  {msg.user}
-                </span>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-[11px] font-semibold tracking-wide text-[#facc15]">
+                    {msg.user}
+                  </span>
+                  {msg.isWhisper && (
+                    <span className="shrink-0 rounded bg-violet-500/20 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wide text-violet-200">
+                      Sussurro
+                    </span>
+                  )}
+                </div>
                 <span className="text-[9px] text-zinc-400 select-none">
                   {msg.time}
                 </span>
@@ -284,13 +332,45 @@ export const GlassChat: React.FC<GlassChatProps> = ({
 
       {/* Input Bar */}
       <form onSubmit={handleSubmit} className="pt-2 border-t border-white/5">
+        {whisperTarget && (
+          <div className="mb-1.5 flex items-center justify-between rounded-lg bg-violet-500/15 px-2.5 py-1.5 text-[10px] text-violet-100">
+            <span>Sussurrando para <strong>{whisperTarget.displayName}</strong></span>
+            <button
+              type="button"
+              onClick={() => setWhisperTarget(null)}
+              className="cursor-pointer rounded px-1.5 py-0.5 text-violet-200 hover:bg-violet-400/20"
+              aria-label="Encerrar sussurro"
+            >
+              Encerrar
+            </button>
+          </div>
+        )}
         <div className="relative flex items-center bg-[#212328]/90 rounded-xl border border-white/10 px-2.5 py-1.5 focus-within:border-[#ffd700]/50 transition-colors">
+          {mentionMatch && mentionSuggestions.length > 0 && (
+            <div className="absolute bottom-full left-0 right-0 z-50 mb-2 max-h-40 overflow-y-auto rounded-xl border border-white/15 bg-[#191a20] p-1.5 shadow-2xl">
+              {mentionSuggestions.map((participant) => (
+                <button
+                  key={participant.sessionId}
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectWhisperTarget(participant)}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-white hover:bg-violet-500/20"
+                >
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-500/20 font-bold text-violet-200">
+                    {participant.displayName.slice(0, 1).toLocaleUpperCase()}
+                  </span>
+                  {participant.displayName}
+                  <span className="ml-auto text-[9px] text-violet-200">Sussurrar</span>
+                </button>
+              ))}
+            </div>
+          )}
           <input
             id="chat-message-input"
             type="text"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="Digite uma mensagem..."
+            placeholder={whisperTarget ? `Mensagem privada para ${whisperTarget.displayName}...` : 'Digite uma mensagem...'}
             className="w-full bg-transparent text-base sm:text-xs text-white placeholder:text-zinc-500 outline-none pr-12"
           />
           <div className="absolute right-1.5 flex items-center gap-0.5">

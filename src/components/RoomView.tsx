@@ -501,26 +501,65 @@ export const RoomView: React.FC<RoomViewProps> = ({
   };
 
   // Send message from chat
-  const handleSendMessage = (text: string) => {
+  const handleSendMessage = async (text: string, recipientSessionId?: string) => {
     const senderName = user?.displayName || 'Você';
+    const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const newMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      user: `${senderName}`,
+      id: messageId,
+      user: senderName,
       avatarUrl: liveAvatar?.thumb,
       text,
       time: 'agora',
       spotId: currentSpotId,
       isPlayer: true,
+      ...(recipientSessionId
+        ? {
+            isWhisper: true,
+            senderSessionId: tabSessionId,
+            recipientSessionId,
+          }
+        : {}),
     };
 
     setChatMessages((prev) => [...prev, newMsg]);
+
+    if (recipientSessionId) {
+      const whisperChannel = supabase.channel(`room-whisper:${recipientSessionId}`);
+      whisperChannel
+        .on('broadcast', { event: 'whisper' }, () => {})
+        .subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            const result = await whisperChannel.send({
+              type: 'broadcast',
+              event: 'whisper',
+              payload: {
+                ...newMsg,
+                senderSessionId: tabSessionId,
+                recipientSessionId,
+                roomId: effectiveRoomId,
+                isPlayer: false,
+              },
+            });
+            if (result !== 'ok') {
+              console.error(`Falha ao enviar sussurro: ${result}`);
+              showHudToast('Não foi possível enviar o sussurro.');
+            }
+            await supabase.removeChannel(whisperChannel);
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error(`Falha ao abrir canal do sussurro: ${status}`);
+            showHudToast('Não foi possível enviar o sussurro.');
+            await supabase.removeChannel(whisperChannel);
+          }
+        });
+      return;
+    }
 
     if (roomChannelRef.current) {
       roomChannelRef.current.send({
         type: 'broadcast',
         event: 'chat',
         payload: {
-          id: `msg-${Date.now()}`,
+          id: messageId,
           user: senderName,
           senderSessionId: tabSessionId,
           avatarUrl: liveAvatar?.thumb,
@@ -556,6 +595,50 @@ export const RoomView: React.FC<RoomViewProps> = ({
   // Normalize channel name across all room ID variants
   const effectiveRoomId = (room.editorRoomId || room.editorRoom?.id || room.id)
     .replace(/^(editor|playtest)-/, '');
+
+  useEffect(() => {
+    const channel = supabase.channel(`room-whisper:${tabSessionId}`);
+    channel
+      .on('broadcast', { event: 'whisper' }, ({ payload }) => {
+        if (
+          !payload ||
+          typeof payload !== 'object' ||
+          payload.recipientSessionId !== tabSessionId ||
+          payload.roomId !== effectiveRoomId ||
+          typeof payload.senderSessionId !== 'string' ||
+          typeof payload.user !== 'string' ||
+          typeof payload.text !== 'string'
+        ) {
+          return;
+        }
+
+        setChatMessages((previousMessages) => [
+          ...previousMessages,
+          {
+            id: typeof payload.id === 'string' ? payload.id : `whisper-${Date.now()}`,
+            user: payload.user,
+            avatarUrl: typeof payload.avatarUrl === 'string' ? payload.avatarUrl : undefined,
+            text: payload.text,
+            time: typeof payload.time === 'string' ? payload.time : 'agora',
+            spotId: typeof payload.spotId === 'number' ? payload.spotId : 1,
+            isPlayer: false,
+            isWhisper: true,
+            senderSessionId: payload.senderSessionId,
+            recipientSessionId: tabSessionId,
+          },
+        ]);
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error(`Falha ao receber sussurros: ${status}`);
+          showHudToast('Não foi possível receber sussurros.');
+        }
+      });
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [tabSessionId, effectiveRoomId]);
 
   // Supabase Realtime Multiplayer Presence & Chat Synchronization
   useEffect(() => {
@@ -871,6 +954,11 @@ export const RoomView: React.FC<RoomViewProps> = ({
         <GlassChat
           roomName={room.name || 'Lounge'}
           messages={chatMessages}
+          participants={remotePlayers.map((player) => ({
+            sessionId: player.userId,
+            displayName: player.displayName || 'Usuário',
+          }))}
+          currentSessionId={tabSessionId}
           onSendMessage={handleSendMessage}
           embedded={isMobile}
           onClose={() => setMobilePanel(null)}

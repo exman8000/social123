@@ -294,6 +294,9 @@ export interface ChatMessage {
   time: string;
   spotId: number;
   isPlayer?: boolean;
+  isWhisper?: boolean;
+  senderSessionId?: string;
+  recipientSessionId?: string;
 }
 
 export interface SpeechBubbleItem {
