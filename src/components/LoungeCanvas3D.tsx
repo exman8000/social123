@@ -19,6 +19,59 @@ import {
 import { extractAssetUuid, resolveAssetDownloadUrl } from '../lib/assetSyncClient';
 import { getActionMotionFactor } from '../lib/actionMotion';
 
+const createFallbackAvatar = (color = 0xc89f57) => {
+  const avatar = new THREE.Group();
+  avatar.userData.isFallbackAvatar = true;
+
+  const skinMaterial = new THREE.MeshStandardMaterial({ color: 0xd9a77e, roughness: 0.78 });
+  const clothingMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.72 });
+  const pantsMaterial = new THREE.MeshStandardMaterial({ color: 0x303542, roughness: 0.82 });
+  const shoeMaterial = new THREE.MeshStandardMaterial({ color: 0x17191d, roughness: 0.9 });
+
+  const addCapsule = (
+    material: THREE.Material,
+    radius: number,
+    length: number,
+    x: number,
+    y: number,
+    z: number,
+    rotationZ = 0
+  ) => {
+    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 4, 8), material);
+    mesh.position.set(x, y, z);
+    mesh.rotation.z = rotationZ;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    avatar.add(mesh);
+  };
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12), skinMaterial);
+  head.position.y = 1.55;
+  head.castShadow = true;
+  avatar.add(head);
+  addCapsule(clothingMaterial, 0.22, 0.48, 0, 0.98, 0);
+  addCapsule(pantsMaterial, 0.105, 0.35, -0.12, 0.39, 0);
+  addCapsule(pantsMaterial, 0.105, 0.35, 0.12, 0.39, 0);
+  addCapsule(skinMaterial, 0.075, 0.36, -0.32, 1.01, 0, -0.08);
+  addCapsule(skinMaterial, 0.075, 0.36, 0.32, 1.01, 0, 0.08);
+  addCapsule(shoeMaterial, 0.085, 0.12, -0.12, 0.09, 0.035);
+  addCapsule(shoeMaterial, 0.085, 0.12, 0.12, 0.09, 0.035);
+  return avatar;
+};
+
+const removeFallbackAvatar = (container: THREE.Group) => {
+  const fallback = container.children.find((child) => child.userData.isFallbackAvatar);
+  if (!fallback) return;
+  container.remove(fallback);
+  fallback.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.geometry.dispose();
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    materials.forEach((material) => material.dispose());
+  });
+};
+
 interface LoungeCanvas3DProps {
   currentPose: AvatarPose;
   transform: AvatarTransform;
@@ -342,6 +395,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           undefined,
           (err) => {
             console.warn('[LoungeCanvas3D] Could not load custom scenario GLB:', err);
+            defaultArchitectureGroup.visible = true;
           }
         );
       };
@@ -352,10 +406,16 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             loadScenarioGlb(freshUrl);
           } else {
             console.warn('[LoungeCanvas3D] Falha ao resolver asset_id do cenário:', sceneAssetUuid);
+            defaultArchitectureGroup.visible = true;
           }
+        }).catch((error) => {
+          console.warn('[LoungeCanvas3D] Falha ao resolver cenário da sala:', error);
+          defaultArchitectureGroup.visible = true;
         });
       } else if (editorRoom?.sceneAssetBlobUrl) {
         loadScenarioGlb(editorRoom.sceneAssetBlobUrl);
+      } else {
+        defaultArchitectureGroup.visible = true;
       }
     } else if (editorRoom?.sceneAssetId === 'inv-scene-1') {
       defaultArchitectureGroup.visible = false;
@@ -366,7 +426,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       const loft = createLoftArchitecture();
       scene.add(loft);
     } else if (editorRoom?.isMissingAsset) {
-      defaultArchitectureGroup.visible = false;
+      defaultArchitectureGroup.visible = true;
     }
 
     // Spot Meshes: Glowing circles (círculos brilhantes) + discreet blinking down-arrow
@@ -1398,6 +1458,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   useEffect(() => {
     if (!remotePlayersGroupRef.current) return;
     const group = remotePlayersGroupRef.current;
+    let isEffectActive = true;
 
     while (group.children.length > 0) {
       group.remove(group.children[0]);
@@ -1417,11 +1478,16 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const poseGlbKey = player.pose?.glbKey || 'stand';
         const isSeated = poseGlbKey.includes('sit') || (spot as any).type === 'sentar';
 
-        const avatarGlbUrl =
+        const directAvatarUrl =
           player.avatar?.fileBlobUrl ||
           player.avatar?.asset_url ||
           player.customAvatarUrl ||
           player.avatarUrl;
+        const avatarAssetId = extractAssetUuid(
+          player.avatar?.assetId ||
+          player.avatar?.originalItemId ||
+          player.customAvatarAssetId
+        );
         const playerContainer = new THREE.Group();
         const remotePosition = player.position;
         playerContainer.position.set(
@@ -1431,6 +1497,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         );
         playerContainer.rotation.y = rotY;
         playerContainer.userData.remoteUserId = player.userId;
+        playerContainer.add(createFallbackAvatar());
 
         // Create 3D floating canvas name tag above remote player's head
         const canvas = document.createElement('canvas');
@@ -1475,12 +1542,15 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const headHeight = isSeated ? 1.0 : 1.45;
         headPosRef.current[player.spotId] = new THREE.Vector3(posX, posY + headHeight, posZ);
 
-        // Render remote users only when their real avatar asset has a valid URL.
-        if (avatarGlbUrl && (avatarGlbUrl.startsWith('http://') || avatarGlbUrl.startsWith('https://') || avatarGlbUrl.startsWith('data:'))) {
+        group.add(playerContainer);
+
+        const loadRemoteAvatar = (avatarUrl: string) => {
+          if (!isEffectActive) return;
           const loader = new GLTFLoader();
           loader.load(
-            avatarGlbUrl,
+            avatarUrl,
             (gltf) => {
+              if (!isEffectActive) return;
               const glbModel = gltf.scene;
               const box = new THREE.Box3().setFromObject(glbModel);
               const size = box.getSize(new THREE.Vector3());
@@ -1493,6 +1563,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               glbModel.position.z = -center.z * scale;
               glbModel.position.y = -box.min.y * scale;
 
+              removeFallbackAvatar(playerContainer);
               playerContainer.add(glbModel);
             },
             undefined,
@@ -1500,12 +1571,26 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               console.warn('Could not load remote player GLB model:', err);
             }
           );
-        }
+        };
 
-        group.add(playerContainer);
+        if (typeof directAvatarUrl === 'string' && /^(https?:\/\/|data:|blob:)/.test(directAvatarUrl)) {
+          loadRemoteAvatar(directAvatarUrl);
+        } else if (avatarAssetId) {
+          void resolveAssetDownloadUrl(avatarAssetId, editorRoom?.id)
+            .then((avatarUrl) => {
+              if (avatarUrl) loadRemoteAvatar(avatarUrl);
+              else console.warn(`Não foi possível resolver o avatar de ${player.displayName || 'outro usuário'}.`);
+            })
+            .catch((error) => {
+              console.warn(`Falha ao resolver o avatar de ${player.displayName || 'outro usuário'}:`, error);
+            });
+        }
       });
     }
-  }, [remotePlayerSceneKey, spots]);
+    return () => {
+      isEffectActive = false;
+    };
+  }, [remotePlayerSceneKey, spots, editorRoom?.id]);
 
   // Update Player transform & Spot position & Pose geometry
   useEffect(() => {
@@ -1581,6 +1666,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       playerGroup.remove(child);
       if ((child as any).geometry) (child as any).geometry.dispose();
     }
+    playerGroup.add(createFallbackAvatar());
 
     const poseName = (currentPose?.name || '').toLowerCase();
 
@@ -1644,6 +1730,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               child.frustumCulled = false;
             }
           });
+          removeFallbackAvatar(playerGroup);
           playerGroup.add(m);
         },
         undefined,
