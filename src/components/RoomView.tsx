@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins, PersonStanding } from 'lucide-react';
+import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins, PersonStanding, Users, Search, Send, Settings } from 'lucide-react';
 import {
   RoomData,
   AvatarPose,
@@ -17,6 +17,7 @@ import {
   ObjectAction,
   RoomMovementSettings,
   InventoryItem,
+  OnlineRoomUser,
 } from '../types';
 import { INITIAL_POSES, INITIAL_SPOTS, INITIAL_CHAT } from '../data/initialData';
 import { LoungeCanvas3D } from './LoungeCanvas3D';
@@ -44,6 +45,7 @@ interface RoomViewProps {
   spotVisualConfig?: SpotVisualConfig;
   customAvatarObject?: PlacedObject | null;
   movementSettings: RoomMovementSettings;
+  onMovementSettingsChange: (settings: RoomMovementSettings) => void;
   storeProducts: RoomStoreProduct[];
   storeLoading: boolean;
   storeError: string | null;
@@ -54,6 +56,8 @@ interface RoomViewProps {
   onSelectActiveAvatar?: (avatarId: string) => void;
   onToggleEquipItem?: (itemId: string) => void;
   onApplyPose?: (poseId: string) => void;
+  onlineUsers: OnlineRoomUser[];
+  onInviteOnlineUser: (userId: string, room: RoomData) => Promise<void>;
 }
 
 export const RoomView: React.FC<RoomViewProps> = ({
@@ -69,6 +73,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
   spotVisualConfig,
   customAvatarObject,
   movementSettings,
+  onMovementSettingsChange,
   storeProducts,
   storeLoading,
   storeError,
@@ -79,6 +84,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
   onSelectActiveAvatar,
   onToggleEquipItem,
   onApplyPose,
+  onlineUsers,
+  onInviteOnlineUser,
 }: RoomViewProps) => {
   // Live Avatar state (can switch dynamically inside room via Room Access Bar!)
   const [liveAvatar, setLiveAvatar] = useState<StoreAvatar | null>(() => {
@@ -344,6 +351,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
   const {
     freeMoveEnabled,
     movementDuration,
+    cameraSensitivity,
     showSpotArrows,
     clickSpotsEnabled,
     teleportOnSpotClick,
@@ -360,11 +368,33 @@ export const RoomView: React.FC<RoomViewProps> = ({
   );
   const [mobilePanel, setMobilePanel] = useState<'chat' | 'inventory' | 'poses' | 'gizmo' | null>(null);
   const [isStoreOpen, setIsStoreOpen] = useState(false);
+  const [isFriendsOpen, setIsFriendsOpen] = useState(false);
+  const [isCameraSettingsOpen, setIsCameraSettingsOpen] = useState(false);
+  const [friendSearch, setFriendSearch] = useState('');
+  const [invitedUserIds, setInvitedUserIds] = useState<string[]>([]);
   const [isStoreInventoryOpen, setIsStoreInventoryOpen] = useState(false);
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
   const [isShopping, setIsShopping] = useState(false);
   const [temporaryRoomObjects, setTemporaryRoomObjects] = useState<PlacedObject[]>([]);
   const [temporarySceneAssetId, setTemporarySceneAssetId] = useState<string | null>(null);
+  useEffect(() => {
+    setInvitedUserIds([]);
+    setFriendSearch('');
+  }, [room.id]);
+  const filteredOnlineUsers = onlineUsers.filter((onlineUser) =>
+    `${onlineUser.username} ${onlineUser.displayName}`
+      .toLocaleLowerCase()
+      .includes(friendSearch.trim().replace(/^@/, '').toLocaleLowerCase())
+  );
+
+  const handleInviteOnlineUser = async (onlineUser: OnlineRoomUser) => {
+    try {
+      await onInviteOnlineUser(onlineUser.userId, room);
+      setInvitedUserIds((ids) => ids.includes(onlineUser.userId) ? ids : [...ids, onlineUser.userId]);
+    } catch (error) {
+      showHudToast(error instanceof Error ? error.message : 'Não foi possível enviar o convite.');
+    }
+  };
   const canTemporarilyReplaceScene = Boolean(
     room.editorRoom?.isPublished &&
       user &&
@@ -522,6 +552,19 @@ export const RoomView: React.FC<RoomViewProps> = ({
   const [screenHeadPositions, setScreenHeadPositions] = useState<
     Record<string, { x: number; y: number }>
   >({});
+  const [screenObjectPositions, setScreenObjectPositions] = useState<
+    Record<string, { x: number; y: number }>
+  >({});
+  const [magneticSnapTarget, setMagneticSnapTarget] = useState<{
+    type: 'player' | 'object';
+    id: string;
+    requestId: number;
+  } | null>(null);
+  const magneticSnapRequestIdRef = React.useRef(0);
+  const requestMagneticSnap = (type: 'player' | 'object', id: string) => {
+    magneticSnapRequestIdRef.current += 1;
+    setMagneticSnapTarget({ type, id, requestId: magneticSnapRequestIdRef.current });
+  };
 
   // Cycle Gizmo Mode: Mover -> Escalar -> Rotação -> Mover...
   // "se o usuairo clica no centro gismo muda p scala se clica de novo mud ap mover se lcia de novo muda p rotação"
@@ -1007,11 +1050,14 @@ export const RoomView: React.FC<RoomViewProps> = ({
           teleportOnSpotClick={teleportOnSpotClick}
           magneticSnapEnabled={magneticSnapEnabled}
           movementDuration={movementDuration}
+          cameraSensitivity={cameraSensitivity}
           onPlayerPositionChange={handlePlayerPositionChange}
           cameraMode={cameraMode}
           cameraControl={cameraControl}
           equippedAccessories={equippedAccessories}
           onUpdateAvatarHeadScreenPos={setScreenHeadPositions}
+          onUpdateObjectScreenPos={setScreenObjectPositions}
+          magneticSnapTarget={magneticSnapTarget}
           key={`${room.editorRoom?.id || room.id}:${editorRoomForScene?.sceneAssetId || 'default'}`}
           editorRoom={editorRoomForScene}
           showSpotArrows={showSpotArrows}
@@ -1031,6 +1077,12 @@ export const RoomView: React.FC<RoomViewProps> = ({
       <SpeechBubbleOverlay
         bubbles={speechBubbles}
         screenPositions={screenHeadPositions}
+        objectScreenPositions={screenObjectPositions}
+        objects={(editorRoomForScene?.placedObjects || [])
+          .filter((object) => object.type === 'movel' || object.type === 'objeto')
+          .map((object) => ({ id: object.id, name: object.name }))}
+        onSnapToPlayer={(userId) => requestMagneticSnap('player', userId)}
+        onSnapToObject={(objectId) => requestMagneticSnap('object', objectId)}
         currentSpotId={currentSpotId}
         activeUserAvatar={liveAvatar}
         user={user}
@@ -1084,6 +1136,18 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
           <button
             type="button"
+            onClick={() => setIsCameraSettingsOpen((open) => !open)}
+            className="flex items-center gap-1.5 rounded-full border border-white/20 bg-black/50 px-2.5 py-1.5 text-[10px] font-bold text-zinc-100 shadow-lg backdrop-blur hover:border-sky-300/50 hover:text-sky-100 sm:text-xs"
+            title="Ajustar sensibilidade da câmera"
+            aria-label="Configurações da câmera"
+            aria-expanded={isCameraSettingsOpen}
+          >
+            <Settings className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Config</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleOpenStore}
             className="flex items-center gap-1.5 rounded-full border border-amber-300/45 bg-black/50 px-2.5 py-1.5 text-[10px] font-bold text-amber-200 shadow-lg backdrop-blur hover:bg-amber-400/15 sm:px-3 sm:text-xs"
             title="Entrar na loja 3D sem sair da sala"
@@ -1106,6 +1170,18 @@ export const RoomView: React.FC<RoomViewProps> = ({
           >
             <Package className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Inventário</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsFriendsOpen((open) => !open)}
+            className="hidden sm:flex items-center gap-1.5 rounded-full border border-sky-300/45 bg-black/50 px-2.5 py-1.5 text-[10px] font-bold text-sky-100 shadow-lg backdrop-blur hover:bg-sky-400/15 sm:text-xs"
+            title="Ver quem está online e convidar para esta sala"
+            aria-label="Amigos online"
+            aria-expanded={isFriendsOpen}
+          >
+            <Users className="h-3.5 w-3.5" />
+            <span>Amigos</span>
+            <span className="rounded-full bg-sky-300/20 px-1.5 py-0.5 text-[9px]">{onlineUsers.length}</span>
           </button>
 
           {/* Playtest Mode Badge */}
@@ -1135,6 +1211,111 @@ export const RoomView: React.FC<RoomViewProps> = ({
           </button>
         </div>
       </header>
+
+      {isFriendsOpen && (
+        <aside className="absolute right-3 top-16 z-[60] flex max-h-[65vh] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-sky-300/35 bg-[#101116]/95 shadow-2xl backdrop-blur-xl">
+          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-bold text-white">Amigos online</h2>
+              <p className="mt-0.5 text-[11px] text-zinc-400">Convide alguém para {room.name}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsFriendsOpen(false)}
+              className="rounded-lg p-2 text-zinc-300 hover:bg-white/10 hover:text-white"
+              aria-label="Fechar amigos online"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <label className="mx-3 my-3 flex items-center gap-2 rounded-xl border border-white/10 bg-black/40 px-3 py-2">
+            <Search className="h-4 w-4 text-zinc-400" />
+            <input
+              type="search"
+              value={friendSearch}
+              onChange={(event) => setFriendSearch(event.target.value)}
+              placeholder="Buscar por @username"
+              className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-zinc-500"
+            />
+          </label>
+          <div className="min-h-20 flex-1 overflow-y-auto px-3 pb-3">
+            {room.isPlaytest ? (
+              <p className="py-6 text-center text-xs text-zinc-400">
+                Convites ficam disponíveis em salas públicas ou publicadas.
+              </p>
+            ) : !user || user.isGuest ? (
+              <p className="py-6 text-center text-xs text-zinc-400">Entre na sua conta para convidar usuários.</p>
+            ) : filteredOnlineUsers.length === 0 ? (
+              <p className="py-6 text-center text-xs text-zinc-400">
+                {onlineUsers.length ? 'Nenhum resultado para esta busca.' : 'Não há outros usuários online agora.'}
+              </p>
+            ) : (
+              filteredOnlineUsers.map((onlineUser) => {
+                const wasInvited = invitedUserIds.includes(onlineUser.userId);
+                return (
+                  <div
+                    key={onlineUser.userId}
+                    className="mb-2 flex items-center gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2"
+                  >
+                    <span className="h-2 w-2 flex-shrink-0 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-semibold text-white">{onlineUser.displayName}</p>
+                      <p className="truncate text-[11px] text-sky-200">@{onlineUser.username}</p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={wasInvited || Boolean(room.isPlaytest)}
+                      onClick={() => void handleInviteOnlineUser(onlineUser)}
+                      className="flex items-center gap-1 rounded-lg bg-sky-400/15 px-2.5 py-1.5 text-[10px] font-bold text-sky-100 hover:bg-sky-300/25 disabled:cursor-default disabled:text-emerald-300"
+                    >
+                      {wasInvited ? <Check className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+                      {wasInvited ? 'Enviado' : 'Convidar'}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </aside>
+      )}
+
+      {isCameraSettingsOpen && (
+        <aside className="absolute right-3 top-16 z-[60] w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-sky-300/35 bg-[#101116]/95 p-4 text-white shadow-2xl backdrop-blur-xl">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-bold">Config da câmera</h2>
+            <button
+              type="button"
+              onClick={() => setIsCameraSettingsOpen(false)}
+              className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/10 hover:text-white"
+              aria-label="Fechar config da câmera"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <label htmlFor="room-camera-sensitivity" className="mb-2 flex justify-between text-xs font-semibold">
+            <span>Sensibilidade</span>
+            <span className="font-mono text-sky-200">{cameraSensitivity.toFixed(2)}×</span>
+          </label>
+          <input
+            id="room-camera-sensitivity"
+            type="range"
+            min="0.5"
+            max="2.5"
+            step="0.05"
+            value={cameraSensitivity}
+            onChange={(event) =>
+              onMovementSettingsChange({
+                ...movementSettings,
+                cameraSensitivity: Number(event.target.value),
+              })
+            }
+            className="w-full cursor-pointer accent-sky-400"
+          />
+          <p className="mt-2 text-[11px] text-zinc-400">
+            Ajuste arrasto e zoom até a câmera responder como preferir.
+          </p>
+        </aside>
+      )}
 
       {/* FLOATING ROOM AUDIO PLAYER (Web Radio & Playlist MP3) */}
       <RoomAudioPlayer
@@ -1211,6 +1392,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
             ['chat', MessageSquare, 'Chat'],
             ['inventory', Package, 'Inventário'],
             ['poses', PersonStanding, 'Poses'],
+            ['friends', Users, 'Amigos'],
             ['gizmo', Move3d, 'Gizmo'],
             ['shop', Store, 'Loja'],
           ] as const).map(([key, Icon, label]) => (
@@ -1219,6 +1401,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
               type="button"
               onClick={() => {
                 if (key === 'shop') handleOpenStore();
+                else if (key === 'friends') setIsFriendsOpen((open) => !open);
                 else if (key === 'inventory') {
                   setIsStoreInventoryOpen((open) => !open);
                   setMobilePanel(null);
@@ -1231,6 +1414,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
               }}
               className={`flex flex-col items-center justify-center min-w-[56px] h-11 rounded-xl text-[10px] font-semibold transition-colors cursor-pointer ${
                 (key === 'shop' && isStoreOpen) ||
+                (key === 'friends' && isFriendsOpen) ||
                 (key === 'inventory' && isStoreInventoryOpen) ||
                 (key !== 'shop' && key !== 'inventory' && mobilePanel === key)
                   ? 'bg-[#ffd700] text-black'

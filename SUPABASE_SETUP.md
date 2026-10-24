@@ -2,6 +2,8 @@
 
 Este documento contém todas as definições DDL, tabelas, permissões RLS e configurações do banco de dados PostgreSQL / Supabase para o projeto 3D Social Lounge.
 
+Para bancos já existentes, aplique `supabase/migrations/20261024000000_usernames.sql` para criar @nomes únicos antes de usar cadastro e convites.
+
 ---
 
 ## 1. Tabelas Principais
@@ -70,6 +72,11 @@ CREATE TABLE IF NOT EXISTS public.showcase_rooms (
 CREATE INDEX IF NOT EXISTS idx_showcase_rooms_published ON public.showcase_rooms(is_published);
 CREATE INDEX IF NOT EXISTS idx_showcase_rooms_user_id ON public.showcase_rooms(user_id);
 ```
+
+### `public.showcase_room_purchases`
+Registra a propriedade das salas adquiridas. Cada conta só pode consultar suas próprias compras; o RPC `purchase_showcase_room` desconta as moedas e registra a aquisição atomicamente.
+
+Para bancos já existentes, aplique `supabase/migrations/20261019000000_showcase_room_purchases.sql`.
 
 ### `public.assets`
 Armazena metadados de binários 3D (`model.glb`) persistidos no Object Storage S3.

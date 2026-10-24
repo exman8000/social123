@@ -5,6 +5,10 @@ import { ObjectAction, SpeechBubbleItem, StoreAvatar, CreatorUser } from '../typ
 interface SpeechBubbleOverlayProps {
   bubbles: SpeechBubbleItem[];
   screenPositions: Record<string, { x: number; y: number }>;
+  objectScreenPositions?: Record<string, { x: number; y: number }>;
+  objects?: Array<{ id: string; name: string }>;
+  onSnapToPlayer?: (userId: string) => void;
+  onSnapToObject?: (objectId: string) => void;
   currentSpotId?: number;
   activeUserAvatar?: StoreAvatar | null;
   user?: CreatorUser | null;
@@ -19,6 +23,10 @@ interface SpeechBubbleOverlayProps {
 export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
   bubbles,
   screenPositions,
+  objectScreenPositions = {},
+  objects = [],
+  onSnapToPlayer,
+  onSnapToObject,
   currentSpotId = 2,
   activeUserAvatar,
   user,
@@ -63,6 +71,7 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
 
       return {
         name: remoteUser.displayName || `Usuário ${remoteUser.spotId}`,
+        remoteUserId: String(remoteUser.userId),
         photo: userPhoto,
         isPlayer: false,
         isRemoteUser: true,
@@ -127,6 +136,8 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
                   if (info.isPlayer) {
                     onFocusPlayer?.();
                     if (avatarActions.length > 0) setIsActionsOpen((open) => !open);
+                  } else if (info.remoteUserId) {
+                    onSnapToPlayer?.(info.remoteUserId);
                   }
                 }}
                 aria-expanded={info.isPlayer && avatarActions.length > 0 ? isActionsOpen : undefined}
@@ -140,7 +151,7 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
                     ? `bg-gradient-to-r from-black/90 via-[#1a1710]/90 to-black/90 border-[#ffd700]/80 shadow-[0_0_14px_rgba(255,215,0,0.25)] cursor-pointer ${
                         avatarActions.length ? 'hover:border-cyan-300' : 'hover:border-amber-300/60'
                       }`
-                    : 'bg-black/80 border-white/20 cursor-default'
+                    : 'bg-black/80 border-white/20 cursor-pointer hover:border-amber-300/70'
                 }`}
               >
                 <img
@@ -203,6 +214,22 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
               )}
             </div>
           </div>
+        );
+      })}
+      {objects.map((object) => {
+        const position = objectScreenPositions[object.id];
+        if (!position) return null;
+        return (
+          <button
+            key={`room-object-label-${object.id}`}
+            type="button"
+            onClick={() => onSnapToObject?.(object.id)}
+            aria-label={`Aproximar avatar de ${object.name || 'objeto'}`}
+            className="pointer-events-auto absolute max-w-40 -translate-x-1/2 -translate-y-full truncate rounded-full border border-amber-300/60 bg-black/85 px-2.5 py-1 text-[10px] font-bold text-amber-100 shadow-lg backdrop-blur transition-colors hover:border-amber-200 hover:bg-amber-950/95"
+            style={{ left: `${position.x}px`, top: `${position.y - 8}px` }}
+          >
+            {object.name || 'Objeto'}
+          </button>
         );
       })}
     </div>

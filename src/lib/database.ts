@@ -544,6 +544,60 @@ export async function purchaseStoreItemFromDatabase(
   return { coins: data.coins, alreadyOwned: Boolean(data.already_owned) };
 }
 
+export async function fetchUserPurchasedShowcaseRoomIds(user: CreatorUser | null): Promise<string[]> {
+  if (!user || user.isGuest) return [];
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Sua sessão expirou. Entre novamente para acessar suas salas.');
+  }
+
+  const { data, error } = await supabase
+    .from('showcase_room_purchases')
+    .select('room_id')
+    .eq('user_id', user.id);
+  if (error) throw error;
+  return (data || []).map((row) => row.room_id);
+}
+
+export async function purchaseShowcaseRoomFromDatabase(
+  user: CreatorUser | null,
+  roomId: string
+): Promise<{ coins: number; alreadyOwned: boolean }> {
+  if (!user || user.isGuest) {
+    throw new Error('Entre com sua conta para adquirir uma sala.');
+  }
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Sua sessão expirou. Entre novamente para comprar.');
+  }
+
+  const { data, error } = await supabase.rpc('purchase_showcase_room', {
+    p_room_id: roomId,
+  });
+  if (error) {
+    if (error.message.includes('INSUFFICIENT_COINS')) {
+      throw new Error('Saldo insuficiente para adquirir esta sala.');
+    }
+    if (error.message.includes('SHOWCASE_ROOM_NOT_FOUND')) {
+      throw new Error('Esta sala não está mais disponível para compra.');
+    }
+    if (error.message.includes('SHOWCASE_ROOM_INVALID_PRICE')) {
+      throw new Error('Esta sala tem um preço inválido e não pode ser comprada.');
+    }
+    if (error.message.includes('SHOWCASE_ROOM_NOT_FOR_SALE')) {
+      throw new Error('Esta sala não está à venda.');
+    }
+    if (error.message.includes('SELF_PURCHASE_NOT_ALLOWED')) {
+      throw new Error('Você já é o criador desta sala.');
+    }
+    throw error;
+  }
+  if (!data || typeof data.coins !== 'number') {
+    throw new Error('O banco não confirmou a aquisição da sala.');
+  }
+  return { coins: data.coins, alreadyOwned: Boolean(data.already_owned) };
+}
+
 /**
  * Fetch all published showcase rooms from Supabase across all accounts and tabs.
  * Does not fall back to localStorage as source.
@@ -612,7 +666,8 @@ export async function fetchPublicShowcaseRooms(): Promise<any[]> {
           thumb: row.cover_url || row.thumbnail_url || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80',
           badge: 'CRIADOR',
           isFromEditor: true,
-          price: row.price || 0,
+          isPurchasable: true,
+          price: Number(row.price) || 0,
           publishMode: row.publish_mode || 'simples',
           assetId: extractedSceneUuid || undefined,
           isMissingAsset: !extractedSceneUuid && !isPresetArchitecture,

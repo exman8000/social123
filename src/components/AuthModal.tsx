@@ -22,6 +22,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [showSwitchForm, setShowSwitchForm] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -43,19 +44,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         if (error) throw error;
         if (data.user) {
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('username, display_name')
+            .eq('id', data.user.id)
+            .maybeSingle();
+          if (profileError) throw profileError;
           onAuthSuccess({
             id: data.user.id,
             email: data.user.email || email,
-            displayName: data.user.email?.split('@')[0] || 'Criador',
+            displayName:
+              profile?.display_name ||
+              data.user.email?.split('@')[0] ||
+              'Criador',
+            username:
+              profile?.username ||
+              (typeof data.user.user_metadata?.username === 'string'
+                ? data.user.user_metadata.username
+                : undefined),
             isGuest: false,
           });
           setShowSwitchForm(false);
           onClose();
         }
       } else {
+        const normalizedUsername = username.trim().replace(/^@/, '').toLowerCase();
+        if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
+          throw new Error('O @ deve ter de 3 a 20 caracteres: letras, números ou _.');
+        }
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              username: normalizedUsername,
+              display_name: email.split('@')[0] || normalizedUsername,
+            },
+          },
         });
 
         if (error) throw error;
@@ -64,6 +89,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             id: data.user.id,
             email: data.user.email || email,
             displayName: data.user.email?.split('@')[0] || 'Criador',
+            username: normalizedUsername,
             isGuest: false,
           });
           setShowSwitchForm(false);
@@ -79,6 +105,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         );
       } else if (raw.includes('invalid login credentials')) {
         setErrorMsg('E-mail ou senha incorretos. Caso ainda não tenha uma conta, alterne para a aba "CADASTRAR".');
+      } else if (raw.includes('profiles_username_lower_uidx') || raw.includes('duplicate key')) {
+        setErrorMsg('Este @ já está em uso. Escolha outro nome de usuário.');
       } else if (raw.includes('user already registered')) {
         setErrorMsg('Este e-mail já está cadastrado. Alterne para a aba "ENTRAR" e faça o login com sua senha.');
       } else {
@@ -95,6 +123,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       id: `local-${userEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
       email: userEmail,
       displayName: userEmail.split('@')[0] || 'Criador',
+      username: userEmail.split('@')[0]?.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 20),
       isGuest: false,
     };
     onAuthSuccess(localUser);
@@ -171,6 +200,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <p className="text-xs text-zinc-400 truncate font-mono mt-0.5">
                   {currentUser.email}
                 </p>
+                {currentUser.username && (
+                  <p className="mt-1 text-xs font-semibold text-sky-200">@{currentUser.username}</p>
+                )}
                 <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/70 border border-emerald-500/40 text-[10px] text-emerald-300 font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   <span>Conectado via Supabase</span>
@@ -230,6 +262,30 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                {mode === 'signup' && (
+                  <>
+                    <label className="mb-1 block text-xs font-medium text-[#d4af37]">
+                      Nome de usuário (@)
+                    </label>
+                    <div className="relative mb-4 flex items-center">
+                      <span className="absolute left-3 text-sm text-[#d4af37]/60">@</span>
+                      <input
+                        type="text"
+                        required
+                        minLength={3}
+                        maxLength={20}
+                        pattern="[A-Za-z0-9_]{3,20}"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value.replace(/^@/, ''))}
+                        placeholder="seu_usuario"
+                        autoComplete="username"
+                        className="w-full rounded-lg border border-[#d4af37]/40 bg-[#16181e] py-2 pl-8 pr-3 text-xs text-[#e8d5b5] outline-none placeholder:text-[#e8d5b5]/30 focus:border-[#d4af37]"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
               <div>
                 <label className="block text-xs font-medium text-[#d4af37] mb-1">
                   E-mail

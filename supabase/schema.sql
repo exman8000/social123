@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     email TEXT,
     display_name TEXT NOT NULL DEFAULT 'Criador Anônimo',
+    username TEXT NOT NULL CHECK (username ~ '^[A-Za-z0-9_]{3,20}$'),
     avatar_url TEXT DEFAULT 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
     coins INTEGER NOT NULL DEFAULT 2450,
     gems INTEGER NOT NULL DEFAULT 180,
@@ -21,6 +22,8 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_username_lower_uidx
+    ON public.profiles (lower(username));
 
 -- 3. TABELA DE ITENS DA LOJA (Avatares, Acessórios, Itens/Roupas, Poses, Salas e Móveis)
 -- Suporta publicação no Modo Simples e Modo Avançado
@@ -64,6 +67,15 @@ CREATE TABLE IF NOT EXISTS public.showcase_rooms (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
+-- 4.1. OWNERSHIP OF PURCHASED SHOWCASE ROOMS (PRIVATE ROOMS)
+CREATE TABLE IF NOT EXISTS public.showcase_room_purchases (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    room_id UUID NOT NULL REFERENCES public.showcase_rooms(id) ON DELETE CASCADE,
+    purchased_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    UNIQUE (user_id, room_id)
+);
+
 -- 5. TABELA DE INVENTÁRIO DO USUÁRIO (Itens comprados ou criados pelo usuário)
 CREATE TABLE IF NOT EXISTS public.user_inventory (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -100,6 +112,8 @@ CREATE INDEX IF NOT EXISTS idx_store_items_created_at ON public.store_items(crea
 CREATE INDEX IF NOT EXISTS idx_showcase_rooms_user_id ON public.showcase_rooms(user_id);
 CREATE INDEX IF NOT EXISTS idx_showcase_rooms_published ON public.showcase_rooms(is_published);
 CREATE INDEX IF NOT EXISTS idx_showcase_rooms_created_at ON public.showcase_rooms(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_showcase_room_purchases_user_id
+    ON public.showcase_room_purchases(user_id);
 
 CREATE INDEX IF NOT EXISTS idx_user_inventory_user_id ON public.user_inventory(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_poses_user_id ON public.user_poses(user_id);
@@ -110,6 +124,8 @@ CREATE INDEX IF NOT EXISTS idx_user_poses_user_id ON public.user_poses(user_id);
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.store_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.showcase_rooms ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.showcase_room_purchases ENABLE ROW LEVEL SECURITY;
+GRANT SELECT ON public.showcase_room_purchases TO authenticated;
 ALTER TABLE public.user_inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_poses ENABLE ROW LEVEL SECURITY;
 
@@ -188,6 +204,13 @@ CREATE POLICY "Criadores podem excluir suas próprias salas"
     TO authenticated
     USING ((SELECT auth.uid()) = user_id);
 
+DROP POLICY IF EXISTS "Usuários podem visualizar suas salas adquiridas"
+    ON public.showcase_room_purchases;
+CREATE POLICY "Usuários podem visualizar suas salas adquiridas"
+    ON public.showcase_room_purchases FOR SELECT
+    TO authenticated
+    USING ((SELECT auth.uid()) = user_id);
+
 -- Políticas para Inventário do Usuário
 DROP POLICY IF EXISTS "Usuários podem visualizar apenas seu próprio inventário" ON public.user_inventory;
 CREATE POLICY "Usuários podem visualizar apenas seu próprio inventário"
@@ -228,11 +251,15 @@ CREATE POLICY "Usuários podem gerenciar suas próprias poses"
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO public.profiles (id, email, display_name, avatar_url, coins, gems, level)
+    INSERT INTO public.profiles (id, email, display_name, username, avatar_url, coins, gems, level)
     VALUES (
         NEW.id,
         NEW.email,
         COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1), 'Criador Luzenne'),
+        lower(COALESCE(
+            NULLIF(NEW.raw_user_meta_data->>'username', ''),
+            'user_' || substring(replace(NEW.id::text, '-', ''), 1, 12)
+        )),
         COALESCE(NEW.raw_user_meta_data->>'avatar_url', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'),
         2450,
         180,
@@ -324,3 +351,79 @@ $$;
 
 REVOKE ALL ON FUNCTION public.purchase_store_item(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.purchase_store_item(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.purchase_showcase_room(p_room_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_user_id UUID := auth.uid();
+    v_room RECORD;
+    v_balance INTEGER;
+    v_already_owned BOOLEAN;
+BEGIN
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'AUTHENTICATION_REQUIRED' USING ERRCODE = '28000';
+    END IF;
+
+    SELECT id, user_id, price
+      INTO v_room
+      FROM public.showcase_rooms
+     WHERE id = p_room_id
+       AND is_published = TRUE
+     FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'SHOWCASE_ROOM_NOT_FOUND' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_room.price IS NULL OR v_room.price < 0 THEN
+        RAISE EXCEPTION 'SHOWCASE_ROOM_INVALID_PRICE' USING ERRCODE = '23514';
+    END IF;
+    IF v_room.price = 0 THEN
+        RAISE EXCEPTION 'SHOWCASE_ROOM_NOT_FOR_SALE' USING ERRCODE = '23514';
+    END IF;
+    IF v_room.user_id = v_user_id THEN
+        RAISE EXCEPTION 'SELF_PURCHASE_NOT_ALLOWED' USING ERRCODE = '23514';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+          FROM public.showcase_room_purchases
+         WHERE user_id = v_user_id
+           AND room_id = p_room_id
+    )
+      INTO v_already_owned;
+
+    IF v_already_owned THEN
+        SELECT coins INTO v_balance
+          FROM public.profiles
+         WHERE id = v_user_id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'USER_PROFILE_NOT_FOUND' USING ERRCODE = 'P0002';
+        END IF;
+        RETURN jsonb_build_object('coins', v_balance, 'already_owned', TRUE);
+    END IF;
+
+    UPDATE public.profiles
+       SET coins = coins - v_room.price,
+           updated_at = timezone('utc'::text, now())
+     WHERE id = v_user_id
+       AND coins >= v_room.price
+    RETURNING coins INTO v_balance;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'INSUFFICIENT_COINS' USING ERRCODE = 'P0001';
+    END IF;
+
+    INSERT INTO public.showcase_room_purchases (user_id, room_id)
+    VALUES (v_user_id, p_room_id)
+    ON CONFLICT (user_id, room_id) DO NOTHING;
+
+    RETURN jsonb_build_object('coins', v_balance, 'already_owned', FALSE);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.purchase_showcase_room(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.purchase_showcase_room(UUID) TO authenticated;

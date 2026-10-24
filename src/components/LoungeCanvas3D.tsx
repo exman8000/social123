@@ -34,8 +34,15 @@ interface LoungeCanvas3DProps {
   clickSpotsEnabled?: boolean;
   teleportOnSpotClick?: boolean;
   magneticSnapEnabled?: boolean;
+  magneticSnapTarget?: {
+    type: 'player' | 'object';
+    id: string;
+    requestId: number;
+  } | null;
   movementDuration?: number;
+  cameraSensitivity?: number;
   onPlayerPositionChange?: (position: [number, number, number]) => void;
+  onUpdateObjectScreenPos?: (positions: Record<string, { x: number; y: number }>) => void;
   cameraMode: 'orbit' | 'frontal' | 'closeup' | 'topdown';
   equippedAccessories?: any[];
   onUpdateAvatarHeadScreenPos?: (positions: Record<string, { x: number; y: number }>) => void;
@@ -61,9 +68,12 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   freeMoveEnabled = false,
   clickSpotsEnabled = true,
   teleportOnSpotClick = false,
-  magneticSnapEnabled = false,
+  magneticSnapEnabled = true,
+  magneticSnapTarget = null,
   movementDuration = 2,
+  cameraSensitivity = 1.35,
   onPlayerPositionChange,
+  onUpdateObjectScreenPos,
   cameraMode,
   equippedAccessories,
   onUpdateAvatarHeadScreenPos,
@@ -137,6 +147,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   magneticSnapEnabledRef.current = magneticSnapEnabled;
   const movementDurationRef = useRef(movementDuration);
   movementDurationRef.current = movementDuration;
+  const cameraSensitivityRef = useRef(cameraSensitivity);
+  cameraSensitivityRef.current = cameraSensitivity;
   const movementTargetRef = useRef<{
     from: THREE.Vector3;
     to: THREE.Vector3;
@@ -175,6 +187,84 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   onSelectSpotRef.current = onSelectSpot;
 
   const placedObjectsMapRef = useRef<Map<string, THREE.Group>>(new Map());
+  const magneticMovableObjectIdsRef = useRef(new Set<string>());
+  magneticMovableObjectIdsRef.current = new Set(
+    (editorRoom?.placedObjects || [])
+      .filter((object) => object.type === 'movel' || object.type === 'objeto')
+      .map((object) => object.id)
+  );
+  const processedMagneticSnapRequestRef = useRef(0);
+  const onUpdateObjectScreenPosRef = useRef(onUpdateObjectScreenPos);
+  onUpdateObjectScreenPosRef.current = onUpdateObjectScreenPos;
+
+  useEffect(() => {
+    const request = magneticSnapTarget;
+    if (!request || processedMagneticSnapRequestRef.current === request.requestId) return;
+    processedMagneticSnapRequestRef.current = request.requestId;
+    if (!magneticSnapEnabled || !playerGroupRef.current) return;
+
+    let targetGroup: THREE.Group | undefined;
+    if (request.type === 'object') {
+      targetGroup = placedObjectsMapRef.current.get(request.id);
+    } else {
+      const remoteGroup = remotePlayersGroupRef.current;
+      const remoteContainer = remoteGroup?.children.find(
+        (child) => child.userData.remoteUserId === request.id
+      );
+      targetGroup = remoteContainer?.children.find(
+        (child) => !(child instanceof THREE.Sprite)
+      ) as THREE.Group | undefined;
+    }
+    if (!targetGroup) return;
+
+    targetGroup.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(targetGroup);
+    if (bounds.isEmpty()) return;
+
+    const player = playerGroupRef.current;
+    const center = bounds.getCenter(new THREE.Vector3());
+    const halfSize = bounds.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    const direction = new THREE.Vector2(
+      player.position.x - center.x,
+      player.position.z - center.z
+    );
+    if (direction.lengthSq() < 0.0001) direction.set(0, 1);
+    direction.normalize();
+    const projectedHalfExtent =
+      Math.abs(direction.x) * halfSize.x + Math.abs(direction.y) * halfSize.z;
+    const boundaryX = Math.max(0.5, (editorRoom?.boundary?.x || 16) / 2 - 0.35);
+    const boundaryZ = Math.max(0.5, (editorRoom?.boundary?.z || 16) / 2 - 0.35);
+    const destination = new THREE.Vector3(
+      THREE.MathUtils.clamp(
+        center.x + direction.x * (projectedHalfExtent + 0.48),
+        -boundaryX,
+        boundaryX
+      ),
+      player.position.y,
+      THREE.MathUtils.clamp(
+        center.z + direction.y * (projectedHalfExtent + 0.48),
+        -boundaryZ,
+        boundaryZ
+      )
+    );
+    const nearestX = THREE.MathUtils.clamp(destination.x, bounds.min.x, bounds.max.x);
+    const nearestZ = THREE.MathUtils.clamp(destination.z, bounds.min.z, bounds.max.z);
+    if (Math.hypot(destination.x - nearestX, destination.z - nearestZ) < 0.38) return;
+
+    cameraFocusUserIdRef.current = null;
+    cameraFocusTargetRef.current = null;
+    cameraPanOffsetRef.current.set(0, 0, 0);
+    movementTargetRef.current = {
+      from: player.position.clone(),
+      to: destination,
+      startedAt: performance.now(),
+    };
+  }, [
+    magneticSnapTarget?.requestId,
+    magneticSnapEnabled,
+    editorRoom?.boundary?.x,
+    editorRoom?.boundary?.z,
+  ]);
   const remotePlayerSceneKey = (remotePlayers || [])
     .map(
       (player) =>
@@ -780,6 +870,25 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 
           onUpdateAvatarHeadScreenPos(screenPosMap);
         }
+        if (onUpdateObjectScreenPosRef.current && container) {
+          const rect = container.getBoundingClientRect();
+          const objectPositions: Record<string, { x: number; y: number }> = {};
+          placedObjectsMapRef.current.forEach((objectGroup, objectId) => {
+            if (!magneticMovableObjectIdsRef.current.has(objectId)) return;
+            objectGroup.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(objectGroup);
+            if (bounds.isEmpty()) return;
+            const worldLabelPosition = bounds.getCenter(new THREE.Vector3());
+            worldLabelPosition.y = bounds.max.y + 0.12;
+            worldLabelPosition.project(cam);
+            if (worldLabelPosition.z >= 1) return;
+            objectPositions[objectId] = {
+              x: ((worldLabelPosition.x + 1) / 2) * rect.width,
+              y: ((-worldLabelPosition.y + 1) / 2) * rect.height,
+            };
+          });
+          onUpdateObjectScreenPosRef.current(objectPositions);
+        }
       }
 
       // Complete an active click-to-move even when free floor movement is disabled.
@@ -1165,10 +1274,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 
       // Left-click Orbit
       if (isDraggingRef.current) {
-        cameraAnglesRef.current.theta -= deltaX * 0.005;
+        const sensitivity = cameraSensitivityRef.current;
+        cameraAnglesRef.current.theta -= deltaX * 0.005 * sensitivity;
         cameraAnglesRef.current.phi = Math.max(
           -0.35,
-          Math.min(1.40, cameraAnglesRef.current.phi + deltaY * 0.005)
+          Math.min(1.40, cameraAnglesRef.current.phi + deltaY * 0.005 * sensitivity)
         );
       }
     };
@@ -1445,7 +1555,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       const delta = Math.max(-150, Math.min(150, e.deltaY));
-      const zoomFactor = Math.exp(delta * 0.0018);
+      const zoomFactor = Math.exp(delta * 0.0018 * cameraSensitivityRef.current);
       const current = cameraAnglesRef.current.radius;
       const next = current * zoomFactor;
       // At minimum radius, keep zooming by moving the orbit target forward (dolly) instead of stalling
@@ -1561,8 +1671,9 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         if (gesture.pinchDistance > 0 && distance > 0) {
           const previousRadius = cameraAnglesRef.current.radius;
           const zoomRatio = gesture.pinchDistance / distance;
+          const sensitivity = cameraSensitivityRef.current;
           const nextRadius = THREE.MathUtils.clamp(
-            previousRadius * Math.pow(zoomRatio, 1.35),
+            previousRadius * Math.pow(zoomRatio, 1.35 * sensitivity),
             MIN_CAMERA_RADIUS,
             MAX_CAMERA_RADIUS
           );
@@ -1570,7 +1681,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           cameraAnglesRef.current.radius = nextRadius;
           if (zoomChange > 0) {
             cameraAnglesRef.current.phi = THREE.MathUtils.clamp(
-              cameraAnglesRef.current.phi + zoomChange * 0.28,
+              cameraAnglesRef.current.phi + zoomChange * 0.28 * sensitivity,
               -0.35,
               1.40
             );
@@ -1585,11 +1696,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
             cameraPanOffsetRef.current.addScaledVector(
               right,
-              -(midpointX - gesture.midpointX) * factor
+              -(midpointX - gesture.midpointX) * factor * sensitivity
             );
             cameraPanOffsetRef.current.addScaledVector(
               up,
-              (midpointY - gesture.midpointY) * factor
+              (midpointY - gesture.midpointY) * factor * sensitivity
             );
           }
         }
@@ -1605,9 +1716,10 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         previousMousePositionRef.current = { x: touch.clientX, y: touch.clientY };
         if (Math.abs(deltaX) + Math.abs(deltaY) > 1) {
           touchGestureRef.current.moved = true;
-          cameraAnglesRef.current.theta -= deltaX * 0.005;
+          const sensitivity = cameraSensitivityRef.current;
+          cameraAnglesRef.current.theta -= deltaX * 0.005 * sensitivity;
           cameraAnglesRef.current.phi = THREE.MathUtils.clamp(
-            cameraAnglesRef.current.phi + deltaY * 0.005,
+            cameraAnglesRef.current.phi + deltaY * 0.005 * sensitivity,
             -0.35,
             1.40
           );
@@ -1694,17 +1806,24 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       const factor = visibleHeightAtDist / Math.max(100, container.clientHeight);
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
       const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-      cameraPanOffsetRef.current.addScaledVector(right, -deltaX * factor);
-      cameraPanOffsetRef.current.addScaledVector(up, deltaY * factor);
+      cameraPanOffsetRef.current.addScaledVector(
+        right,
+        -deltaX * factor * cameraSensitivityRef.current
+      );
+      cameraPanOffsetRef.current.addScaledVector(
+        up,
+        deltaY * factor * cameraSensitivityRef.current
+      );
     }
     if (deltaZoom !== 0) {
       cameraAnglesRef.current.radius = THREE.MathUtils.clamp(
-        cameraAnglesRef.current.radius * Math.exp(deltaZoom),
+        cameraAnglesRef.current.radius *
+          Math.exp(deltaZoom * cameraSensitivityRef.current),
         MIN_CAMERA_RADIUS,
         MAX_CAMERA_RADIUS
       );
     }
-  }, [cameraControl?.panX, cameraControl?.panY, cameraControl?.zoom]);
+  }, [cameraControl?.panX, cameraControl?.panY, cameraControl?.zoom, cameraSensitivity]);
 
   useEffect(() => {
     if (!focusAvatarRequest) return;
@@ -1891,45 +2010,6 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         );
         playerContainer.rotation.y = rotY;
         playerContainer.userData.remoteUserId = player.userId;
-
-        // Create 3D floating canvas name tag above remote player's head
-        const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = 'rgba(15, 17, 23, 0.90)';
-          ctx.beginPath();
-          if (ctx.roundRect) {
-            ctx.roundRect(6, 6, 244, 52, 10);
-          } else {
-            ctx.rect(6, 6, 244, 52);
-          }
-          ctx.fill();
-
-          ctx.strokeStyle = '#ffd700';
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          if (ctx.roundRect) {
-            ctx.roundRect(6, 6, 244, 52, 10);
-          } else {
-            ctx.rect(6, 6, 244, 52);
-          }
-          ctx.stroke();
-
-          ctx.font = 'bold 20px sans-serif';
-          ctx.fillStyle = '#ffd700';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(player.displayName || 'Usuário', 128, 32);
-        }
-
-        const texture = new THREE.CanvasTexture(canvas);
-        const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
-        const sprite = new THREE.Sprite(spriteMat);
-        sprite.position.set(0, 1.35, 0);
-        sprite.scale.set(1.4, 0.35, 1);
-        playerContainer.add(sprite);
 
         // Store remote player head position in 3D for floating SpeechBubbleOverlay projection
         const headHeight = isSeated ? 1.0 : 1.45;

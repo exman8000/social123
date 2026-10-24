@@ -173,6 +173,7 @@ export interface CreatorUser {
   id: string;
   email: string;
   displayName: string;
+  username?: string;
   isGuest: boolean;
 }
 
@@ -219,6 +220,20 @@ export interface RoomMovementSettings {
   teleportOnSpotClick: boolean;
   magneticSnapEnabled: boolean;
   movementDuration: number;
+  cameraSensitivity: number;
+}
+
+export interface OnlineRoomUser {
+  userId: string;
+  username: string;
+  displayName: string;
+}
+
+export interface RoomInvitation {
+  roomId: string;
+  roomName: string;
+  senderName: string;
+  senderUsername: string;
 }
 
 export interface AvatarPose {
@@ -279,6 +294,7 @@ export interface RoomData {
   isCenterHighlighted?: boolean;
   editorRoomId?: string;
   isFromEditor?: boolean;
+  isPurchasable?: boolean;
   editorRoom?: RoomEditorState;
   isPlaytest?: boolean;
   assetId?: string;
@@ -289,6 +305,7 @@ export interface RoomData {
   audioAutoplay?: boolean;
   likesCount?: number;
   isLiked?: boolean;
+  price?: number;
 }
 
 export interface ChatMessage {
