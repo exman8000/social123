@@ -58,6 +58,8 @@ const getStoredCreatorUserId = () => {
 
 const activeAvatarStorageKey = (userId: string) => `3d_social_creator_active_avatar_id:${userId}`;
 const accountDataStorageKey = (userId: string) => `3d_social_account_data:${userId}`;
+const magneticSnapDefaultMigrationKey = (userId: string) =>
+  `3d_social_room_movement_magnetic_default_v1:${userId}`;
 
 const dedupeInventoryPoses = (items: InventoryItem[]) => {
   const seenIds = new Set<string>();
@@ -106,7 +108,7 @@ const DEFAULT_ROOM_MOVEMENT_SETTINGS: RoomMovementSettings = {
   clickSpotsEnabled: true,
   freeMoveEnabled: true,
   teleportOnSpotClick: false,
-  magneticSnapEnabled: false,
+  magneticSnapEnabled: true,
   movementDuration: 2,
 };
 
@@ -210,6 +212,8 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     const storageKey = `3d_social_room_movement:${user?.id || 'guest'}`;
+    const magneticDefaultAlreadyApplied =
+      localStorage.getItem(magneticSnapDefaultMigrationKey(user?.id || 'guest')) === 'true';
     let savedSettings: Partial<RoomMovementSettings> = {};
     let legacyDuration: number | undefined;
     try {
@@ -244,13 +248,18 @@ export const App: React.FC = () => {
           ? savedSettings.teleportOnSpotClick
           : DEFAULT_ROOM_MOVEMENT_SETTINGS.teleportOnSpotClick,
       magneticSnapEnabled:
-        typeof savedSettings.magneticSnapEnabled === 'boolean'
+        !magneticDefaultAlreadyApplied
+          ? DEFAULT_ROOM_MOVEMENT_SETTINGS.magneticSnapEnabled
+          : typeof savedSettings.magneticSnapEnabled === 'boolean'
           ? savedSettings.magneticSnapEnabled
           : DEFAULT_ROOM_MOVEMENT_SETTINGS.magneticSnapEnabled,
       movementDuration: Number.isFinite(savedDuration)
         ? Math.max(0.5, Math.min(8, savedDuration))
         : DEFAULT_ROOM_MOVEMENT_SETTINGS.movementDuration,
     });
+    if (!magneticDefaultAlreadyApplied) {
+      safeLocalStorageSet(magneticSnapDefaultMigrationKey(user?.id || 'guest'), 'true');
+    }
     loadedMovementSettingsKeyRef.current = storageKey;
   }, [user?.id]);
 

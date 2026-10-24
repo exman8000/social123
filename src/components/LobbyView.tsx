@@ -646,7 +646,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             <label className="mb-4 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3">
               <span>
                 <span className="block text-sm font-semibold">Teletransportar ao clicar no spot</span>
-                <span className="block text-xs text-zinc-400">Aparece imediatamente no spot, sem caminhar.</span>
+                <span className="block text-xs text-zinc-400">Desaparece e reaparece no spot com uma transição suave.</span>
               </span>
               <input
                 type="checkbox"
@@ -664,7 +664,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             <label className="mb-4 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3">
               <span>
                 <span className="block text-sm font-semibold">Encaixe magnético</span>
-                <span className="block text-xs text-zinc-400">Ao clicar em móveis ou pessoas, posiciona o avatar perto sem atravessar.</span>
+                <span className="block text-xs text-zinc-400">Aproxime-se pelo lado clicado e contorne pessoas e móveis sem atravessá-los.</span>
               </span>
               <input
                 type="checkbox"

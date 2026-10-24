@@ -22,6 +22,134 @@ import { getActionMotionFactor } from '../lib/actionMotion';
 const MIN_CAMERA_RADIUS = 0.35;
 const MAX_CAMERA_RADIUS = 100;
 
+const createCollisionFreePath = (
+  from: THREE.Vector3,
+  to: THREE.Vector3,
+  obstacleBounds: THREE.Box3[]
+): THREE.Vector3[] => {
+  const clearance = 0.34;
+  const rectangles = obstacleBounds
+    .filter((bounds) => !bounds.isEmpty())
+    .map((bounds) => ({
+      minX: bounds.min.x - clearance,
+      maxX: bounds.max.x + clearance,
+      minZ: bounds.min.z - clearance,
+      maxZ: bounds.max.z + clearance,
+    }))
+    .filter((rect) => {
+      const startInside =
+        from.x > rect.minX && from.x < rect.maxX &&
+        from.z > rect.minZ && from.z < rect.maxZ;
+      const endInside =
+        to.x > rect.minX && to.x < rect.maxX &&
+        to.z > rect.minZ && to.z < rect.maxZ;
+      return !startInside && !endInside;
+    });
+
+  const crossesObstacle = (
+    start: THREE.Vector2,
+    end: THREE.Vector2,
+    rect: (typeof rectangles)[number]
+  ) => {
+    const delta = end.clone().sub(start);
+    let entry = 0;
+    let exit = 1;
+    const axes: [number, number, number, number][] = [
+      [start.x, delta.x, rect.minX, rect.maxX],
+      [start.y, delta.y, rect.minZ, rect.maxZ],
+    ];
+    for (const [origin, direction, min, max] of axes) {
+      if (Math.abs(direction) < 1e-8) {
+        if (origin <= min || origin >= max) return false;
+        continue;
+      }
+      const first = (min - origin) / direction;
+      const second = (max - origin) / direction;
+      entry = Math.max(entry, Math.min(first, second));
+      exit = Math.min(exit, Math.max(first, second));
+      if (entry >= exit) return false;
+    }
+
+    const midpoint = start.clone().addScaledVector(delta, (entry + exit) / 2);
+    return (
+      midpoint.x > rect.minX &&
+      midpoint.x < rect.maxX &&
+      midpoint.y > rect.minZ &&
+      midpoint.y < rect.maxZ
+    );
+  };
+
+  const start = new THREE.Vector2(from.x, from.z);
+  const end = new THREE.Vector2(to.x, to.z);
+  if (!rectangles.some((rect) => crossesObstacle(start, end, rect))) {
+    return [from.clone(), to.clone()];
+  }
+
+  const points = [start, end];
+  rectangles.forEach((rect) => {
+    const cornerOffset = 0.02;
+    const corners: [number, number][] = [
+      [rect.minX - cornerOffset, rect.minZ - cornerOffset],
+      [rect.minX - cornerOffset, rect.maxZ + cornerOffset],
+      [rect.maxX + cornerOffset, rect.minZ - cornerOffset],
+      [rect.maxX + cornerOffset, rect.maxZ + cornerOffset],
+    ];
+    corners.forEach(([x, z]) => {
+      const point = new THREE.Vector2(x, z);
+      const insideAnotherObstacle = rectangles.some((other) => (
+        point.x > other.minX && point.x < other.maxX &&
+        point.y > other.minZ && point.y < other.maxZ
+      ));
+      if (!insideAnotherObstacle) points.push(point);
+    });
+  });
+
+  const distances = points.map(() => Infinity);
+  const previous = points.map(() => -1);
+  const visited = points.map(() => false);
+  distances[0] = 0;
+
+  for (let step = 0; step < points.length; step += 1) {
+    let current = -1;
+    for (let index = 0; index < points.length; index += 1) {
+      if (!visited[index] && (current < 0 || distances[index] < distances[current])) {
+        current = index;
+      }
+    }
+    if (current < 0 || !Number.isFinite(distances[current])) break;
+    if (current === 1) break;
+    visited[current] = true;
+
+    for (let next = 0; next < points.length; next += 1) {
+      if (next === current || visited[next]) continue;
+      if (rectangles.some((rect) => crossesObstacle(points[current], points[next], rect))) continue;
+      const candidate = distances[current] + points[current].distanceTo(points[next]);
+      if (candidate < distances[next]) {
+        distances[next] = candidate;
+        previous[next] = current;
+      }
+    }
+  }
+
+  if (!Number.isFinite(distances[1])) return [from.clone(), to.clone()];
+  const path: THREE.Vector3[] = [];
+  for (let index = 1; index >= 0; index = previous[index]) {
+    path.push(new THREE.Vector3(points[index].x, from.y, points[index].y));
+    if (index === 0) break;
+    if (previous[index] < 0) return [from.clone(), to.clone()];
+  }
+  return path.reverse();
+};
+
+interface TeleportFadeMaterial {
+  mesh: THREE.Mesh;
+  original: THREE.Material | THREE.Material[];
+  clones: THREE.Material[];
+  opacity: number[];
+  transparent: boolean[];
+  depthWrite: boolean[];
+}
+
 interface LoungeCanvas3DProps {
   currentPose: AvatarPose;
   focusAvatarRequest?: number;
@@ -141,8 +269,50 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     from: THREE.Vector3;
     to: THREE.Vector3;
     startedAt: number;
+    path?: THREE.Vector3[];
+    pathLength?: number;
   } | null>(null);
+  const teleportAnimationRef = useRef<{
+    startedAt: number;
+    destination: THREE.Vector3;
+    swapped: boolean;
+  } | null>(null);
+  const teleportFadeMaterialsRef = useRef<TeleportFadeMaterial[]>([]);
   const freeMoveHoldRef = useRef<THREE.Vector3 | null>(null);
+  const restoreTeleportFade = () => {
+    teleportFadeMaterialsRef.current.forEach(({ mesh, original, clones }) => {
+      mesh.material = original;
+      clones.forEach((material) => material.dispose());
+    });
+    teleportFadeMaterialsRef.current = [];
+  };
+  const prepareTeleportFade = (player: THREE.Group) => {
+    restoreTeleportFade();
+    player.traverse((node) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      const original = node.material;
+      const sourceMaterials = Array.isArray(original) ? original : [original];
+      const clones = sourceMaterials.map((material) => material.clone());
+      teleportFadeMaterialsRef.current.push({
+        mesh: node,
+        original,
+        clones,
+        opacity: sourceMaterials.map((material) => material.opacity),
+        transparent: sourceMaterials.map((material) => material.transparent),
+        depthWrite: sourceMaterials.map((material) => material.depthWrite),
+      });
+      node.material = Array.isArray(original) ? clones : clones[0];
+    });
+  };
+  const setTeleportFadeOpacity = (opacity: number) => {
+    teleportFadeMaterialsRef.current.forEach((record) => {
+      record.clones.forEach((material, index) => {
+        material.opacity = record.opacity[index] * opacity;
+        material.transparent = opacity < 1 || record.transparent[index];
+        material.depthWrite = opacity < 1 ? false : record.depthWrite[index];
+      });
+    });
+  };
   const previousPoseOffsetsRef = useRef({
     height: currentPose.heightOffset || 0,
     rotation: currentPose.rotationOffset || 0,
@@ -700,6 +870,28 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         previousAction.scale = 1;
       }
 
+      const teleport = teleportAnimationRef.current;
+      if (player && teleport) {
+        const elapsed = performance.now() - teleport.startedAt;
+        const fadeOutDuration = 170;
+        const fadeInDuration = 260;
+        const smoothstep = (value: number) => value * value * (3 - 2 * value);
+        if (!teleport.swapped && elapsed >= fadeOutDuration) {
+          player.position.copy(teleport.destination);
+          teleport.swapped = true;
+        }
+        const opacity = elapsed < fadeOutDuration
+          ? 1 - smoothstep(elapsed / fadeOutDuration)
+          : smoothstep((elapsed - fadeOutDuration) / fadeInDuration);
+        setTeleportFadeOpacity(THREE.MathUtils.clamp(opacity, 0, 1));
+        if (elapsed >= fadeOutDuration + fadeInDuration) {
+          player.position.copy(teleport.destination);
+          freeMoveHoldRef.current = teleport.destination.clone();
+          restoreTeleportFade();
+          teleportAnimationRef.current = null;
+        }
+      }
+
       // Smooth camera orbit positioning
       if (cameraRef.current) {
         const cam = cameraRef.current;
@@ -785,6 +977,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       // Complete an active click-to-move even when free floor movement is disabled.
       if (
         playerGroupRef.current &&
+        !teleportAnimationRef.current &&
         (freeMoveEnabledRef.current || movementTargetRef.current || freeMoveHoldRef.current)
       ) {
         const movement = movementTargetRef.current;
@@ -792,7 +985,22 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           const elapsed = Math.max(0, (performance.now() - movement.startedAt) / 1000);
           const progress = Math.min(1, elapsed / Math.max(0.5, movementDurationRef.current));
           const easedProgress = progress * progress * (3 - 2 * progress);
-          playerGroupRef.current.position.lerpVectors(movement.from, movement.to, easedProgress);
+          const path = movement.path || [movement.from, movement.to];
+          const pathLength = movement.pathLength || movement.from.distanceTo(movement.to);
+          let remainingDistance = pathLength * easedProgress;
+          for (let index = 1; index < path.length; index += 1) {
+            const segmentLength = path[index - 1].distanceTo(path[index]);
+            if (remainingDistance <= segmentLength || index === path.length - 1) {
+              const segmentProgress = segmentLength > 0 ? remainingDistance / segmentLength : 1;
+              playerGroupRef.current.position.lerpVectors(
+                path[index - 1],
+                path[index],
+                THREE.MathUtils.clamp(segmentProgress, 0, 1)
+              );
+              break;
+            }
+            remainingDistance -= segmentLength;
+          }
           const direction = movement.to.clone().sub(movement.from);
           if (direction.lengthSq() > 0.0001) {
             playerGroupRef.current.rotation.y = Math.atan2(direction.x, direction.z);
@@ -805,7 +1013,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         } else if (freeMoveEnabledRef.current && freeMoveHoldRef.current) {
           playerGroupRef.current.position.copy(freeMoveHoldRef.current);
         }
-      } else if (editorRoom?.spots && playerGroupRef.current) {
+      } else if (!teleportAnimationRef.current && editorRoom?.spots && playerGroupRef.current) {
         const activeEditorSpot =
           editorRoom.spots[currentSpotIdRef.current - 1] ||
           editorRoom.spots.find((s, idx) => idx + 1 === currentSpotIdRef.current);
@@ -1190,18 +1398,61 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         );
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, cameraRef.current);
-        const movePlayerTo = (target: THREE.Vector3, teleport = false) => {
+        const getMagneticCollisionBounds = (): THREE.Box3[] => {
+          const bounds: THREE.Box3[] = [];
+          placedObjectsMapRef.current.forEach((group) => {
+            group.updateMatrixWorld(true);
+            const objectBounds = new THREE.Box3().setFromObject(group);
+            if (!objectBounds.isEmpty()) bounds.push(objectBounds);
+          });
+
+          const remoteGroup = remotePlayersGroupRef.current;
+          if (remoteGroup) {
+            remoteGroup.updateMatrixWorld(true);
+            remoteGroup.children.forEach((container) => {
+              const avatarVisual = container.children.find(
+                (child) => !(child instanceof THREE.Sprite)
+              );
+              if (!avatarVisual) return;
+              const avatarBounds = new THREE.Box3().setFromObject(avatarVisual);
+              if (!avatarBounds.isEmpty()) bounds.push(avatarBounds);
+            });
+          }
+          return bounds;
+        };
+        const movePlayerTo = (
+          target: THREE.Vector3,
+          teleport = false,
+          obstacleBounds: THREE.Box3[] = []
+        ) => {
           const player = playerGroupRef.current;
           if (!player) return;
           const destination = target.clone();
           if (teleport) {
             movementTargetRef.current = null;
-            player.position.copy(destination);
+            prepareTeleportFade(player);
+            teleportAnimationRef.current = {
+              startedAt: performance.now(),
+              destination,
+              swapped: false,
+            };
           } else {
+            teleportAnimationRef.current = null;
+            restoreTeleportFade();
+            const from = player.position.clone();
+            const path = obstacleBounds.length
+              ? createCollisionFreePath(from, destination, obstacleBounds)
+              : [from, destination];
+            const pathLength = path.slice(1).reduce(
+              (length, point, index) => length + path[index].distanceTo(point),
+              0
+            );
             movementTargetRef.current = {
-              from: player.position.clone(),
+              from,
               to: destination,
               startedAt: performance.now(),
+              path,
+              pathLength,
             };
           }
           freeMoveHoldRef.current = destination;
@@ -1211,9 +1462,18 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           if (!player || bounds.isEmpty()) return false;
           const center = bounds.getCenter(new THREE.Vector3());
           const halfSize = bounds.getSize(new THREE.Vector3()).multiplyScalar(0.5);
-          const direction = new THREE.Vector2(player.position.x - center.x, player.position.z - center.z);
-          if (direction.lengthSq() < 0.0001 && hitPoint) {
+          const direction = new THREE.Vector2();
+          if (hitPoint) {
             direction.set(hitPoint.x - center.x, hitPoint.z - center.z);
+          }
+          if (direction.lengthSq() < 0.01 && cameraRef.current) {
+            direction.set(
+              cameraRef.current.position.x - center.x,
+              cameraRef.current.position.z - center.z
+            );
+          }
+          if (direction.lengthSq() < 0.0001) {
+            direction.set(player.position.x - center.x, player.position.z - center.z);
           }
           if (direction.lengthSq() < 0.0001) direction.set(0, 1);
           direction.normalize();
@@ -1230,7 +1490,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           const nearestX = THREE.MathUtils.clamp(target.x, bounds.min.x, bounds.max.x);
           const nearestZ = THREE.MathUtils.clamp(target.z, bounds.min.z, bounds.max.z);
           if (Math.hypot(target.x - nearestX, target.z - nearestZ) < 0.38) return false;
-          movePlayerTo(target);
+          movePlayerTo(target, false, getMagneticCollisionBounds());
           return true;
         };
 
@@ -1394,6 +1654,25 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               playerGroupRef.current.position.y,
               THREE.MathUtils.clamp(floorPoint.z, -boundaryZ, boundaryZ)
             );
+            if (magneticSnapEnabledRef.current) {
+              const nearbyBounds = getMagneticCollisionBounds()
+                .map((bounds) => {
+                  const nearestX = THREE.MathUtils.clamp(target.x, bounds.min.x, bounds.max.x);
+                  const nearestZ = THREE.MathUtils.clamp(target.z, bounds.min.z, bounds.max.z);
+                  return {
+                    bounds,
+                    distance: Math.hypot(target.x - nearestX, target.z - nearestZ),
+                  };
+                })
+                .filter((entry) => entry.distance <= 1.25)
+                .sort((a, b) => a.distance - b.distance);
+              if (nearbyBounds[0] && moveBesideBounds(nearbyBounds[0].bounds, floorPoint)) {
+                cameraFocusUserIdRef.current = null;
+                cameraFocusTargetRef.current = null;
+                cameraPanOffsetRef.current.set(0, 0, 0);
+                return;
+              }
+            }
             const minAvatarDistance = 0.72;
             const peers = remotePlayersRef.current.map((remote, index) => {
               const position = remote.position;
@@ -1428,13 +1707,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               });
             }
 
-            const from = playerGroupRef.current.position.clone();
-            movementTargetRef.current = {
-              from,
-              to: target,
-              startedAt: performance.now(),
-            };
-            freeMoveHoldRef.current = target.clone();
+            movePlayerTo(
+              target,
+              false,
+              magneticSnapEnabledRef.current ? getMagneticCollisionBounds() : []
+            );
             return;
           }
         }
@@ -1668,6 +1945,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       domEl.removeEventListener('touchcancel', handleTouchCancel);
       window.removeEventListener('keydown', handleKeyDown);
       domEl.style.touchAction = '';
+      teleportAnimationRef.current = null;
+      restoreTeleportFade();
       if (container.contains(domEl)) {
         container.removeChild(domEl);
       }
@@ -2076,6 +2355,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   useEffect(() => {
     if (!playerGroupRef.current) return;
     const player = playerGroupRef.current;
+    if (teleportAnimationRef.current) return;
 
     // Spot position & max radius clamping
     const activeSpot = spots.find((s) => s.id === currentSpotId) || spots[1];
@@ -2185,10 +2465,36 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     while (playerGroup.children.length > 0) {
       const child = playerGroup.children[0];
       playerGroup.remove(child);
-      if ((child as any).geometry) (child as any).geometry.dispose();
+      child.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        node.geometry.dispose();
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => material.dispose());
+      });
     }
 
     const poseName = (currentPose?.name || '').toLowerCase();
+    const fallbackAvatar = createCharacterMesh({
+      skinColor: 0xd6a77a,
+      hairColor: 0x2b2018,
+      clothColor: 0x9b2638,
+      pantsColor: 0x25242a,
+      hasGlasses: false,
+      hasGoldChain: true,
+      hairStyle: 'curly',
+      currentPose: currentPose?.name,
+    });
+    playerGroup.add(fallbackAvatar);
+
+    const removeFallbackAvatar = () => {
+      playerGroup.remove(fallbackAvatar);
+      fallbackAvatar.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        node.geometry.dispose();
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => material.dispose());
+      });
+    };
 
     const applyModelPoseAdjustments = (m: THREE.Group) => {
       if (poseName.includes('sentar')) {
@@ -2250,6 +2556,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               child.frustumCulled = false;
             }
           });
+          removeFallbackAvatar();
           playerGroup.add(m);
         },
         undefined,
