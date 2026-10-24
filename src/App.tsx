@@ -14,6 +14,8 @@ import { TrajectoryTimelineModal } from './components/TrajectoryTimelineModal';
 import { ProjectSaveRestoreModal } from './components/ProjectSaveRestoreModal';
 import { LobbyView } from './components/LobbyView';
 import { RoomView } from './components/RoomView';
+import { FriendsModal } from './components/FriendsModal';
+import type { OnlineFriend, RoomInvite } from './components/FriendsModal';
 import type { RoomStoreProduct } from './components/RoomStoreShowroom3D';
 import { UserCustomizationView } from './components/UserCustomizationView';
 import { INITIAL_ROOMS } from './data/creatorData';
@@ -41,6 +43,7 @@ import {
   RoomMovementSettings,
 } from './types';
 import { supabase } from './lib/supabase';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { persistStoreItem, persistShowcaseRoom, fetchPublicStoreItems, fetchPublicShowcaseRooms, fetchUserInventoryFromDatabase, fetchUserWalletFromDatabase, purchaseStoreItemFromDatabase, recordUserInventoryItem, deleteRemoteInventoryItem, clearAllRemoteInventory } from './lib/database';
 import { getGlbFile, saveGlbFile, deleteGlbFile, clearAllGlbFiles } from './lib/storageIndexedDB';
 import { safeLocalStorageSet, sanitizeItemsForStorage } from './lib/storageUtils';
@@ -106,6 +109,14 @@ const DEFAULT_ROOM_MOVEMENT_SETTINGS: RoomMovementSettings = {
   freeMoveEnabled: true,
   movementDuration: 2,
 };
+
+interface SocialPresence {
+  userId: string;
+  displayName: string;
+  isGuest: boolean;
+  roomId: string | null;
+  roomName: string | null;
+}
 
 export const App: React.FC = () => {
   // Navigation State between Editor, Rooms Lobby, Social Room, and User Customization/Loja
@@ -199,6 +210,103 @@ export const App: React.FC = () => {
 
   // User Auth State
   const [user, setUser] = useState<CreatorUser | null>(null);
+  const [onlineFriends, setOnlineFriends] = useState<OnlineFriend[]>([]);
+  const [isFriendsModalOpen, setIsFriendsModalOpen] = useState(false);
+  const [incomingRoomInvite, setIncomingRoomInvite] = useState<RoomInvite | null>(null);
+  const [presenceError, setPresenceError] = useState<string | null>(null);
+  const socialPresenceChannelRef = React.useRef<RealtimeChannel | null>(null);
+  const [presenceSessionId] = useState(() => {
+    const storageKey = '3d_social_presence_session_id';
+    const storedSessionId = sessionStorage.getItem(storageKey);
+    if (storedSessionId) return storedSessionId;
+
+    const sessionId = `presence-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem(storageKey, sessionId);
+    return sessionId;
+  });
+
+  const presenceUserId = user?.id || `guest:${presenceSessionId}`;
+  const presenceRoom = currentScreen === 'room' ? selectedLobbyRoom : null;
+
+  useEffect(() => {
+    const channel = supabase.channel('social-presence', {
+      config: { presence: { key: presenceSessionId } },
+    });
+    socialPresenceChannelRef.current = channel;
+
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const friendsByUserId = new Map<string, OnlineFriend>();
+        Object.values(channel.presenceState<SocialPresence>()).forEach((presenceEntries) => {
+          const latest = presenceEntries[presenceEntries.length - 1];
+          const userId = latest?.userId;
+          if (typeof userId !== 'string' || userId === presenceUserId) return;
+
+          friendsByUserId.set(userId, {
+            userId,
+            displayName: typeof latest.displayName === 'string' ? latest.displayName : 'Visitante',
+            roomId: typeof latest.roomId === 'string' ? latest.roomId : null,
+            roomName: typeof latest.roomName === 'string' ? latest.roomName : null,
+            isGuest: latest.isGuest === true,
+          });
+        });
+        setOnlineFriends(
+          [...friendsByUserId.values()].sort((left, right) =>
+            left.displayName.localeCompare(right.displayName)
+          )
+        );
+      })
+      .on('broadcast', { event: 'room-invite' }, ({ payload }) => {
+        if (
+          payload &&
+          typeof payload === 'object' &&
+          payload.recipientUserId === presenceUserId &&
+          payload.senderUserId !== presenceUserId &&
+          typeof payload.senderName === 'string' &&
+          typeof payload.roomId === 'string' &&
+          typeof payload.roomName === 'string'
+        ) {
+          setIncomingRoomInvite({
+            senderName: payload.senderName,
+            roomId: payload.roomId,
+            roomName: payload.roomName,
+          });
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          setPresenceError(null);
+          const trackingStatus = await channel.track({
+            userId: presenceUserId,
+            displayName: user?.displayName || 'Visitante',
+            isGuest: !user || user.isGuest,
+            roomId: presenceRoom?.id || null,
+            roomName: presenceRoom?.name || null,
+          });
+          if (trackingStatus !== 'ok') {
+            console.error(`Falha ao publicar presença social: ${trackingStatus}`);
+            setPresenceError('Não foi possível carregar as pessoas online. Tente novamente.');
+          }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error(`Falha no canal de presença social: ${status}`);
+          setPresenceError('Não foi possível carregar as pessoas online. Tente novamente.');
+        }
+      });
+
+    return () => {
+      if (socialPresenceChannelRef.current === channel) {
+        socialPresenceChannelRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [
+    presenceSessionId,
+    presenceUserId,
+    user?.displayName,
+    user?.isGuest,
+    presenceRoom?.id,
+    presenceRoom?.name,
+  ]);
 
   const [roomMovementSettings, setRoomMovementSettings] =
     useState<RoomMovementSettings>(DEFAULT_ROOM_MOVEMENT_SETTINGS);
@@ -2523,6 +2631,79 @@ export const App: React.FC = () => {
     return combined;
   }, [rooms, publicShowcaseRooms]);
 
+  const handleInviteFriend = async (friend: OnlineFriend) => {
+    const roomToInvite = presenceRoom || lobbyRooms[lobbyRoomIndex] || lobbyRooms[0];
+    const channel = socialPresenceChannelRef.current;
+    if (!roomToInvite || !channel) {
+      showToast('Não foi possível enviar o convite agora. Tente novamente.');
+      return;
+    }
+
+    try {
+      const result = await channel.send({
+        type: 'broadcast',
+        event: 'room-invite',
+        payload: {
+          senderUserId: presenceUserId,
+          senderName: user?.displayName || 'Visitante',
+          recipientUserId: friend.userId,
+          roomId: roomToInvite.id,
+          roomName: roomToInvite.name,
+        },
+      });
+      if (result !== 'ok') {
+        showToast('Não foi possível enviar o convite. Tente novamente.');
+        return;
+      }
+      showToast(`Convite enviado para ${friend.displayName}.`);
+    } catch (error) {
+      console.error('Falha ao enviar convite de sala:', error);
+      showToast('Não foi possível enviar o convite. Tente novamente.');
+    }
+  };
+
+  const handleAcceptRoomInvite = async () => {
+    if (!incomingRoomInvite) return;
+
+    let invitedRoom = lobbyRooms.find((room) =>
+      room.id === incomingRoomInvite.roomId ||
+      room.editorRoomId === incomingRoomInvite.roomId ||
+      room.editorRoom?.id === incomingRoomInvite.roomId ||
+      room.name === incomingRoomInvite.roomName
+    );
+
+    if (!invitedRoom) {
+      try {
+        const fetchedRooms = await fetchPublicShowcaseRooms();
+        if (fetchedRooms?.length) {
+          setPublicShowcaseRooms((currentRooms) => {
+            const byId = new Map(currentRooms.map((room) => [room.id, room]));
+            fetchedRooms.forEach((room) => byId.set(room.id, room));
+            return [...byId.values()];
+          });
+          invitedRoom = fetchedRooms.find((room) =>
+            room.id === incomingRoomInvite.roomId ||
+            room.editorRoomId === incomingRoomInvite.roomId ||
+            room.editorRoom?.id === incomingRoomInvite.roomId ||
+            room.name === incomingRoomInvite.roomName
+          );
+        }
+      } catch (error) {
+        console.error('Falha ao localizar a sala do convite:', error);
+      }
+    }
+
+    setIncomingRoomInvite(null);
+    if (!invitedRoom) {
+      showToast('A sala do convite não está disponível.');
+      return;
+    }
+
+    setIsFriendsModalOpen(false);
+    setSelectedLobbyRoom(invitedRoom);
+    setCurrentScreen('room');
+  };
+
   // Handle Playtest room without publishing or appearing in vitrine
   const handlePlaytestActiveRoom = () => {
     setIsPublishModalOpen(false);
@@ -2594,9 +2775,7 @@ export const App: React.FC = () => {
             setCustomizationInitialTab('inventario');
             setCurrentScreen('customization');
           }}
-          onOpenFriends={() => {
-            showToast('Lista de amigos conectada.');
-          }}
+          onOpenFriends={() => setIsFriendsModalOpen(true)}
           onOpenEditor={() => setCurrentScreen('editor')}
           user={user}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
@@ -2693,6 +2872,7 @@ export const App: React.FC = () => {
           onSelectActiveAvatar={handleSelectActiveAvatar}
           onToggleEquipItem={handleToggleEquipItem}
           onApplyPose={handleApplyPose}
+          onOpenFriends={() => setIsFriendsModalOpen(true)}
         />
       )}
 
@@ -2957,6 +3137,17 @@ export const App: React.FC = () => {
   )}
 
   {/* GLOBAL MODALS (Always mounted and accessible across all screens: Lobby, Loja, Room, Editor) */}
+  <FriendsModal
+    isOpen={isFriendsModalOpen}
+    friends={onlineFriends}
+    connectionError={presenceError}
+    invite={incomingRoomInvite}
+    onClose={() => setIsFriendsModalOpen(false)}
+    onInviteFriend={handleInviteFriend}
+    onAcceptInvite={handleAcceptRoomInvite}
+    onDeclineInvite={() => setIncomingRoomInvite(null)}
+  />
+
   <AuthModal
     isOpen={isAuthModalOpen}
     onClose={() => setIsAuthModalOpen(false)}

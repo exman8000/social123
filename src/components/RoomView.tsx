@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins } from 'lucide-react';
+import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins, Users } from 'lucide-react';
 import {
   RoomData,
   AvatarPose,
@@ -53,6 +53,7 @@ interface RoomViewProps {
   onSelectActiveAvatar?: (avatarId: string) => void;
   onToggleEquipItem?: (itemId: string) => void;
   onApplyPose?: (poseId: string) => void;
+  onOpenFriends: () => void;
 }
 
 export const RoomView: React.FC<RoomViewProps> = ({
@@ -78,6 +79,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
   onSelectActiveAvatar,
   onToggleEquipItem,
   onApplyPose,
+  onOpenFriends,
 }: RoomViewProps) => {
   // Live Avatar state (can switch dynamically inside room via Room Access Bar!)
   const [liveAvatar, setLiveAvatar] = useState<StoreAvatar | null>(() => {
@@ -798,6 +800,17 @@ export const RoomView: React.FC<RoomViewProps> = ({
             <span className="hidden sm:inline">Inventário</span>
           </button>
 
+          <button
+            type="button"
+            onClick={onOpenFriends}
+            className="hidden items-center gap-1.5 rounded-full border border-white/20 bg-black/50 px-2.5 py-1.5 text-[10px] font-bold text-zinc-100 shadow-lg backdrop-blur transition-colors hover:border-amber-300/50 hover:text-amber-100 sm:flex sm:px-3 sm:text-xs"
+            title="Ver pessoas online e convidar para esta sala"
+            aria-label="Amigos"
+          >
+            <Users className="h-3.5 w-3.5" />
+            Amigos
+          </button>
+
           {/* Playtest Mode Badge */}
           {room.isPlaytest && (
             <div className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/60 text-emerald-300 text-[10px] sm:text-xs font-semibold backdrop-blur-md shadow-[0_0_12px_rgba(16,185,129,0.3)] flex-shrink-0">
@@ -896,6 +909,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
           {([
             ['chat', MessageSquare, 'Chat'],
             ['inventory', Package, 'Inventário'],
+            ['friends', Users, 'Amigos'],
             ['gizmo', Move3d, 'Gizmo'],
             ['shop', Store, 'Loja'],
           ] as const).map(([key, Icon, label]) => (
@@ -903,7 +917,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
               key={key}
               type="button"
               onClick={() => {
-                if (key === 'shop') handleOpenStore();
+                if (key === 'friends') onOpenFriends();
+                else if (key === 'shop') handleOpenStore();
                 else if (key === 'inventory') {
                   setIsStoreInventoryOpen((open) => !open);
                   setMobilePanel(null);
@@ -913,7 +928,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
               className={`flex flex-col items-center justify-center min-w-[56px] h-11 rounded-xl text-[10px] font-semibold transition-colors cursor-pointer ${
                 (key === 'shop' && isStoreOpen) ||
                 (key === 'inventory' && isStoreInventoryOpen) ||
-                (key !== 'shop' && key !== 'inventory' && mobilePanel === key)
+                (key !== 'shop' && key !== 'inventory' && key !== 'friends' && mobilePanel === key)
                   ? 'bg-[#ffd700] text-black'
                   : 'text-[#ffd700] hover:bg-white/10'
               }`}
