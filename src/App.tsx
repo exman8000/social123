@@ -108,7 +108,9 @@ const DEFAULT_ROOM_MOVEMENT_SETTINGS: RoomMovementSettings = {
   clickSpotsEnabled: true,
   freeMoveEnabled: true,
   teleportOnSpotClick: false,
+  alternateAxisWalking: false,
   magneticSnapEnabled: true,
+  cameraSensitivity: 1.4,
   movementDuration: 2,
 };
 
@@ -247,12 +249,19 @@ export const App: React.FC = () => {
         typeof savedSettings.teleportOnSpotClick === 'boolean'
           ? savedSettings.teleportOnSpotClick
           : DEFAULT_ROOM_MOVEMENT_SETTINGS.teleportOnSpotClick,
+      alternateAxisWalking:
+        typeof savedSettings.alternateAxisWalking === 'boolean'
+          ? savedSettings.alternateAxisWalking
+          : DEFAULT_ROOM_MOVEMENT_SETTINGS.alternateAxisWalking,
       magneticSnapEnabled:
         !magneticDefaultAlreadyApplied
           ? DEFAULT_ROOM_MOVEMENT_SETTINGS.magneticSnapEnabled
           : typeof savedSettings.magneticSnapEnabled === 'boolean'
           ? savedSettings.magneticSnapEnabled
           : DEFAULT_ROOM_MOVEMENT_SETTINGS.magneticSnapEnabled,
+      cameraSensitivity: Number.isFinite(Number(savedSettings.cameraSensitivity))
+        ? Math.max(0.5, Math.min(2.5, Number(savedSettings.cameraSensitivity)))
+        : DEFAULT_ROOM_MOVEMENT_SETTINGS.cameraSensitivity,
       movementDuration: Number.isFinite(savedDuration)
         ? Math.max(0.5, Math.min(8, savedDuration))
         : DEFAULT_ROOM_MOVEMENT_SETTINGS.movementDuration,

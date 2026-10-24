@@ -217,7 +217,9 @@ export interface RoomMovementSettings {
   clickSpotsEnabled: boolean;
   freeMoveEnabled: boolean;
   teleportOnSpotClick: boolean;
+  alternateAxisWalking: boolean;
   magneticSnapEnabled: boolean;
+  cameraSensitivity: number;
   movementDuration: number;
 }
 

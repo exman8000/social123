@@ -645,8 +645,8 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
 
             <label className="mb-4 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3">
               <span>
-                <span className="block text-sm font-semibold">Teletransportar ao clicar no spot</span>
-                <span className="block text-xs text-zinc-400">Desaparece e reaparece no spot com uma transição suave.</span>
+                <span className="block text-sm font-semibold">Teletransportar ao clicar</span>
+                <span className="block text-xs text-zinc-400">Desaparece e reaparece suavemente no spot ou no piso clicado.</span>
               </span>
               <input
                 type="checkbox"
@@ -658,6 +658,25 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                   })
                 }
                 className="h-4 w-4 accent-amber-400"
+              />
+            </label>
+
+            <label className={`mb-4 flex items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3 ${movementSettings.teleportOnSpotClick ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+              <span>
+                <span className="block text-sm font-semibold">Andar (eixo alternado)</span>
+                <span className="block text-xs text-zinc-400">Sem teleporte, o avatar se desloca com balanço alternado e pequenos pulos.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={movementSettings.alternateAxisWalking}
+                disabled={movementSettings.teleportOnSpotClick}
+                onChange={(event) =>
+                  onMovementSettingsChange({
+                    ...movementSettings,
+                    alternateAxisWalking: event.target.checked,
+                  })
+                }
+                className="h-4 w-4 accent-emerald-400"
               />
             </label>
 
@@ -678,6 +697,31 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 className="h-4 w-4 accent-emerald-400"
               />
             </label>
+
+            <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3">
+              <label htmlFor="lobby-camera-sensitivity" className="mb-2 flex justify-between text-sm font-semibold">
+                <span>Sensibilidade da câmera</span>
+                <span className="font-mono text-sky-200">{movementSettings.cameraSensitivity.toFixed(1)}×</span>
+              </label>
+              <span className="mb-2 block text-xs text-zinc-400">
+                Ajuste a velocidade de rotação, movimento por toque e zoom.
+              </span>
+              <input
+                id="lobby-camera-sensitivity"
+                type="range"
+                min="0.5"
+                max="2.5"
+                step="0.1"
+                value={movementSettings.cameraSensitivity}
+                onChange={(event) =>
+                  onMovementSettingsChange({
+                    ...movementSettings,
+                    cameraSensitivity: Number(event.target.value),
+                  })
+                }
+                className="w-full cursor-pointer accent-sky-400"
+              />
+            </div>
 
             <div className={`rounded-xl border border-white/10 bg-white/5 p-3 ${movementSettings.freeMoveEnabled || movementSettings.magneticSnapEnabled ? '' : 'opacity-50'}`}>
               <label htmlFor="lobby-movement-duration" className="mb-2 flex justify-between text-sm font-semibold">

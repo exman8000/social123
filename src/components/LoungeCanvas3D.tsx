@@ -161,7 +161,9 @@ interface LoungeCanvas3DProps {
   freeMoveEnabled?: boolean;
   clickSpotsEnabled?: boolean;
   teleportOnSpotClick?: boolean;
+  alternateAxisWalking?: boolean;
   magneticSnapEnabled?: boolean;
+  cameraSensitivity?: number;
   movementDuration?: number;
   onPlayerPositionChange?: (position: [number, number, number]) => void;
   cameraMode: 'orbit' | 'frontal' | 'closeup' | 'topdown';
@@ -189,7 +191,9 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   freeMoveEnabled = false,
   clickSpotsEnabled = true,
   teleportOnSpotClick = false,
+  alternateAxisWalking = false,
   magneticSnapEnabled = false,
+  cameraSensitivity = 1.4,
   movementDuration = 2,
   onPlayerPositionChange,
   cameraMode,
@@ -261,8 +265,12 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   clickSpotsEnabledRef.current = clickSpotsEnabled;
   const teleportOnSpotClickRef = useRef(teleportOnSpotClick);
   teleportOnSpotClickRef.current = teleportOnSpotClick;
+  const alternateAxisWalkingRef = useRef(alternateAxisWalking);
+  alternateAxisWalkingRef.current = alternateAxisWalking;
   const magneticSnapEnabledRef = useRef(magneticSnapEnabled);
   magneticSnapEnabledRef.current = magneticSnapEnabled;
+  const cameraSensitivityRef = useRef(cameraSensitivity);
+  cameraSensitivityRef.current = cameraSensitivity;
   const movementDurationRef = useRef(movementDuration);
   movementDurationRef.current = movementDuration;
   const movementTargetRef = useRef<{
@@ -278,6 +286,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     swapped: boolean;
   } | null>(null);
   const teleportFadeMaterialsRef = useRef<TeleportFadeMaterial[]>([]);
+  const walkingOffsetRef = useRef({ y: 0, rotationX: 0, rotationZ: 0 });
   const freeMoveHoldRef = useRef<THREE.Vector3 | null>(null);
   const restoreTeleportFade = () => {
     teleportFadeMaterialsRef.current.forEach(({ mesh, original, clones }) => {
@@ -869,6 +878,15 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         previousAction.rotation.set(0, 0, 0);
         previousAction.scale = 1;
       }
+      const previousWalkingOffset = walkingOffsetRef.current;
+      if (player) {
+        player.position.y -= previousWalkingOffset.y;
+        player.rotation.x -= previousWalkingOffset.rotationX;
+        player.rotation.z -= previousWalkingOffset.rotationZ;
+      }
+      previousWalkingOffset.y = 0;
+      previousWalkingOffset.rotationX = 0;
+      previousWalkingOffset.rotationZ = 0;
 
       const teleport = teleportAnimationRef.current;
       if (player && teleport) {
@@ -895,6 +913,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       // Smooth camera orbit positioning
       if (cameraRef.current) {
         const cam = cameraRef.current;
+        const cameraResponse = 0.1 + cameraSensitivityRef.current * 0.03;
         if (player) {
           if (cameraFocusUserIdRef.current) {
             const focusedPlayer = remotePlayersRef.current.find(
@@ -913,7 +932,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             cameraFocusTargetRef.current ||
             player.position.clone().add(cameraFollowOffsetRef.current);
           followTarget.add(cameraPanOffsetRef.current);
-          cameraTargetRef.current.lerp(followTarget, 0.08);
+          cameraTargetRef.current.lerp(followTarget, cameraResponse);
         }
         let targetRadius = cameraAnglesRef.current.radius;
         let targetPhi = cameraAnglesRef.current.phi;
@@ -942,7 +961,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const y = target.y + targetRadius * Math.sin(targetPhi) + 0.35;
         const z = target.z + targetRadius * Math.cos(targetTheta) * Math.cos(targetPhi);
 
-        cam.position.lerp(new THREE.Vector3(x, y, z), 0.08);
+        cam.position.lerp(new THREE.Vector3(x, y, z), cameraResponse);
         cam.lookAt(target.x, target.y + targetLookAtY, target.z);
 
         // Project 3D head positions to 2D screen coordinates
@@ -1000,6 +1019,16 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               break;
             }
             remainingDistance -= segmentLength;
+          }
+          if (alternateAxisWalkingRef.current && progress < 1 && pathLength > 0.05) {
+            const stepPhase = elapsed * Math.PI * 2 * 1.7;
+            const hop = (1 - Math.cos(stepPhase * 2)) * 0.018;
+            const rotationX = Math.cos(stepPhase) * 0.025;
+            const rotationZ = Math.sin(stepPhase) * 0.075;
+            playerGroupRef.current.position.y += hop;
+            playerGroupRef.current.rotation.x += rotationX;
+            playerGroupRef.current.rotation.z += rotationZ;
+            walkingOffsetRef.current = { y: hop, rotationX, rotationZ };
           }
           const direction = movement.to.clone().sub(movement.from);
           if (direction.lengthSq() > 0.0001) {
@@ -1366,17 +1395,26 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
         const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
 
-        cameraPanOffsetRef.current.addScaledVector(right, -deltaX * factor);
-        cameraPanOffsetRef.current.addScaledVector(up, deltaY * factor);
+        cameraPanOffsetRef.current.addScaledVector(
+          right,
+          -deltaX * factor * cameraSensitivityRef.current
+        );
+        cameraPanOffsetRef.current.addScaledVector(
+          up,
+          deltaY * factor * cameraSensitivityRef.current
+        );
         return;
       }
 
       // Left-click Orbit
       if (isDraggingRef.current) {
-        cameraAnglesRef.current.theta -= deltaX * 0.005;
+        cameraAnglesRef.current.theta -= deltaX * 0.005 * cameraSensitivityRef.current;
         cameraAnglesRef.current.phi = Math.max(
           -0.35,
-          Math.min(1.40, cameraAnglesRef.current.phi + deltaY * 0.005)
+          Math.min(
+            1.40,
+            cameraAnglesRef.current.phi + deltaY * 0.005 * cameraSensitivityRef.current
+          )
         );
       }
     };
@@ -1490,7 +1528,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           const nearestX = THREE.MathUtils.clamp(target.x, bounds.min.x, bounds.max.x);
           const nearestZ = THREE.MathUtils.clamp(target.z, bounds.min.z, bounds.max.z);
           if (Math.hypot(target.x - nearestX, target.z - nearestZ) < 0.38) return false;
-          movePlayerTo(target, false, getMagneticCollisionBounds());
+          movePlayerTo(
+            target,
+            teleportOnSpotClickRef.current,
+            getMagneticCollisionBounds()
+          );
           return true;
         };
 
@@ -1570,7 +1612,12 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           cameraFocusTargetRef.current = null;
           cameraPanOffsetRef.current.set(0, 0, 0);
           const player = playerGroupRef.current;
-          if (player && (freeMoveEnabledRef.current || teleportOnSpotClickRef.current)) {
+          if (
+            player &&
+            (freeMoveEnabledRef.current ||
+              teleportOnSpotClickRef.current ||
+              alternateAxisWalkingRef.current)
+          ) {
             const offset = transformRef.current.positionOffset;
             const target = new THREE.Vector3(
               clickedSpot.position[0] + (offset?.[0] || 0),
@@ -1640,7 +1687,10 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           }
         }
 
-        if (freeMoveEnabledRef.current && playerGroupRef.current) {
+        if (
+          (freeMoveEnabledRef.current || teleportOnSpotClickRef.current) &&
+          playerGroupRef.current
+        ) {
           cameraFocusUserIdRef.current = null;
           cameraFocusTargetRef.current = null;
           cameraPanOffsetRef.current.set(0, 0, 0);
@@ -1709,7 +1759,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 
             movePlayerTo(
               target,
-              false,
+              teleportOnSpotClickRef.current,
               magneticSnapEnabledRef.current ? getMagneticCollisionBounds() : []
             );
             return;
@@ -1722,7 +1772,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       const delta = Math.max(-150, Math.min(150, e.deltaY));
-      const zoomFactor = Math.exp(delta * 0.0018);
+      const zoomFactor = Math.exp(delta * 0.0018 * cameraSensitivityRef.current);
       const current = cameraAnglesRef.current.radius;
       const next = current * zoomFactor;
       // At minimum radius, keep zooming by moving the orbit target forward (dolly) instead of stalling
@@ -1839,7 +1889,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           const previousRadius = cameraAnglesRef.current.radius;
           const zoomRatio = gesture.pinchDistance / distance;
           const nextRadius = THREE.MathUtils.clamp(
-            previousRadius * Math.pow(zoomRatio, 1.35),
+            previousRadius * Math.pow(zoomRatio, 1.35 * cameraSensitivityRef.current),
             MIN_CAMERA_RADIUS,
             MAX_CAMERA_RADIUS
           );
@@ -1862,11 +1912,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
             cameraPanOffsetRef.current.addScaledVector(
               right,
-              -(midpointX - gesture.midpointX) * factor
+              -(midpointX - gesture.midpointX) * factor * cameraSensitivityRef.current
             );
             cameraPanOffsetRef.current.addScaledVector(
               up,
-              (midpointY - gesture.midpointY) * factor
+              (midpointY - gesture.midpointY) * factor * cameraSensitivityRef.current
             );
           }
         }
@@ -1882,9 +1932,11 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         previousMousePositionRef.current = { x: touch.clientX, y: touch.clientY };
         if (Math.abs(deltaX) + Math.abs(deltaY) > 1) {
           touchGestureRef.current.moved = true;
-          cameraAnglesRef.current.theta -= deltaX * 0.005;
+          cameraAnglesRef.current.theta -=
+            deltaX * 0.005 * cameraSensitivityRef.current;
           cameraAnglesRef.current.phi = THREE.MathUtils.clamp(
-            cameraAnglesRef.current.phi + deltaY * 0.005,
+            cameraAnglesRef.current.phi +
+              deltaY * 0.005 * cameraSensitivityRef.current,
             -0.35,
             1.40
           );
@@ -2425,7 +2477,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         if (freeMoveHoldRef.current) freeMoveHoldRef.current.add(delta);
       }
       freeMoveHoldRef.current = player.position.clone();
-    } else {
+    } else if (!movementTargetRef.current) {
       player.position.set(
         activeSpot.position[0] + offX,
         activeSpot.position[1] + (currentPose.heightOffset || 0) + offY,

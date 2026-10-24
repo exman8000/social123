@@ -347,7 +347,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
     showSpotArrows,
     clickSpotsEnabled,
     teleportOnSpotClick,
+    alternateAxisWalking,
     magneticSnapEnabled,
+    cameraSensitivity,
   } = movementSettings;
   const cameraMode = 'orbit' as const;
 
@@ -1005,7 +1007,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
           freeMoveEnabled={freeMoveEnabled}
           clickSpotsEnabled={clickSpotsEnabled}
           teleportOnSpotClick={teleportOnSpotClick}
+          alternateAxisWalking={alternateAxisWalking}
           magneticSnapEnabled={magneticSnapEnabled}
+          cameraSensitivity={cameraSensitivity}
           movementDuration={movementDuration}
           onPlayerPositionChange={handlePlayerPositionChange}
           cameraMode={cameraMode}
