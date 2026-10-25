@@ -52,6 +52,7 @@ import { fetchRemoteInventory } from './lib/assetSyncClient';
 import { Lightbulb, Sparkles, Maximize2, Minimize2 } from 'lucide-react';
 import { StoreSocialModal, StoreSocialModalState } from './components/StoreSocialModal';
 import { BonePoseEditor } from './components/BonePoseEditor';
+import { TransferBonesModal } from './components/TransferBonesModal';
 
 const getStoredCreatorUserId = () => {
   try {
@@ -704,6 +705,7 @@ export const App: React.FC = () => {
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>('spot-2');
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [bonePoseEditorAvatar, setBonePoseEditorAvatar] = useState<StoreAvatar | null>(null);
+  const [isTransferBonesOpen, setIsTransferBonesOpen] = useState(false);
   const [customAvatarObjectId, setCustomAvatarObjectId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [activeGizmoMode, setActiveGizmoMode] = useState<GizmoEditMode>('mover');
@@ -3642,6 +3644,7 @@ export const App: React.FC = () => {
             onOpenAudioUploadModal={() => setIsAudioUploadModalOpen(true)}
             onInsertAssetToScene={handleInsertAssetToScene}
             onCreateBonePoseFromAsset={handleOpenBonePoseEditor}
+            onOpenBoneTransfer={() => setIsTransferBonesOpen(true)}
             onAddSpot={handleAddSpot}
             onRenameSpot={handleRenameSpot}
             onRemoveSpot={handleRemoveSpot}
@@ -4088,6 +4091,15 @@ export const App: React.FC = () => {
       avatar={bonePoseEditorAvatar}
       onClose={() => setBonePoseEditorAvatar(null)}
       onSave={(name, rotations) => handleCreateBonePose(name, rotations, bonePoseEditorAvatar)}
+    />
+  )}
+  {isTransferBonesOpen && (
+    <TransferBonesModal
+      onClose={() => setIsTransferBonesOpen(false)}
+      onComplete={(item) => {
+        handleUploadSuccess(item, null);
+        showToast(`Rig aplicado. "${item.displayName}" foi salvo como um novo item.`);
+      }}
     />
   )}
 </>

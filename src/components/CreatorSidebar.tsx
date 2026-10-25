@@ -88,6 +88,7 @@ interface CreatorSidebarProps {
   onOpenAudioUploadModal?: () => void;
   onInsertAssetToScene: (asset: InventoryItem) => void;
   onCreateBonePoseFromAsset?: (asset: InventoryItem) => void;
+  onOpenBoneTransfer?: () => void;
   onAddSpot: (type: SpotType, name: string) => void;
   onRenameSpot?: (id: string, name: string) => void;
   onRemoveSpot: (spotId: string) => void;
@@ -164,6 +165,7 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
   onOpenAudioUploadModal,
   onInsertAssetToScene,
   onCreateBonePoseFromAsset,
+  onOpenBoneTransfer,
   onAddSpot,
   onRenameSpot,  onRemoveSpot,
   onClearAllSpots,
@@ -206,7 +208,9 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
   onAvatarTeleport,
   avatarCurrentSpotId = null,
 }) => {
-  const [activeTab, setActiveTab] = useState<'spots' | 'objects' | 'actions' | 'inventory'>('spots');
+  const [activeTab, setActiveTab] = useState<
+    'spots' | 'objects' | 'actions' | 'inventory' | 'bone-transfer'
+  >('spots');
   // Height of the tab bar; dragging the handle below it gives more room to the tab content
   const [tabBarHeight, setTabBarHeight] = useState<number | null>(null);
   const tabBarRef = React.useRef<HTMLDivElement | null>(null);
@@ -390,6 +394,18 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
           >
             <FolderArchive className="w-4 h-4" />
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('bone-transfer');
+              onOpenBoneTransfer?.();
+              onToggleCollapse?.();
+            }}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-[#d4af37] hover:bg-[#d4af37]/20 transition-colors cursor-pointer"
+            title="Transferir bones entre modelos"
+          >
+            <Accessibility className="w-4 h-4" />
+          </button>
         </div>
       </aside>
     );
@@ -409,7 +425,7 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
         </button>
       )}
 
-      {/* Top Tab Bar: [📍 SPOTS] | [🪑 OBJETOS (n)] | [⚡ ACTIONS] | [📦 ITENS (n)] */}
+      {/* Top Tab Bar: Spots, objects, actions, inventory and bone transfer */}
       <div
         ref={tabBarRef}
         style={tabBarHeight !== null ? { height: tabBarHeight } : undefined}
@@ -469,6 +485,23 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
         >
           <FolderArchive className="w-4 h-4 flex-shrink-0" />
           <span>Itens</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('bone-transfer');
+            onOpenBoneTransfer?.();
+          }}
+          className={`h-9 w-full rounded-md px-3 text-xs font-medium flex items-center justify-start gap-2 transition-all cursor-pointer border-l-2 ${
+            activeTab === 'bone-transfer'
+              ? 'border-violet-300 text-violet-200 bg-violet-950/30'
+              : 'border-transparent text-violet-300/70 hover:text-violet-200 hover:bg-violet-950/20'
+          }`}
+          title="Transferir bones de um modelo para outro"
+        >
+          <Accessibility className="w-4 h-4 flex-shrink-0" />
+          <span>Transferir bones</span>
         </button>
       </div>
 
@@ -2522,6 +2555,7 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
                   {publishedCount}
                 </span>
               )}
+
             </button>
           )}
 
@@ -2982,6 +3016,24 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'bone-transfer' && (
+        <div className="flex flex-1 flex-col justify-center gap-3 overflow-y-auto p-4 text-center">
+          <Accessibility className="mx-auto h-8 w-8 text-violet-200" />
+          <h2 className="text-sm font-semibold text-white">Transferir bones</h2>
+          <p className="text-[11px] leading-relaxed text-zinc-400">
+            Envie um modelo com rig e outro sem rig. Gere uma prévia, ajuste a escala e o
+            alinhamento e, se necessário, marque pontos manuais para orientar os pesos.
+          </p>
+          <button
+            type="button"
+            onClick={onOpenBoneTransfer}
+            className="rounded-lg border border-violet-300/50 bg-violet-300/10 px-3 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-300/20"
+          >
+            Abrir ferramenta
+          </button>
         </div>
       )}
     </aside>
