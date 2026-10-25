@@ -60,6 +60,10 @@ export interface ObjectAction {
   id: string;
   name: string; // Ex: "Frente e Trás", "Girar e Crescer", "Órbita 360°"
   motion: SpotMotionConfig;
+  kind?: 'movement' | 'audio';
+  audioUrl?: string;
+  audioIsRadio?: boolean;
+  sourceStoreItemId?: string;
 }
 
 export interface SavedActionHistoryItem {
@@ -113,23 +117,29 @@ export interface InventoryItem {
   id: string;
   assetId?: string;
   storeItemId?: string;
+  isPurchased?: boolean;
   ownerUserId?: string;
   fileName: string;
   displayName: string;
   name?: string;
   thumbUrl: string;
   thumbnailUrl?: string;
-  type: 'Sala' | 'Avatar' | 'Item' | 'Acessorio' | 'Movel' | 'Pose' | 'sala' | 'avatar' | 'item' | 'acessorio' | 'cenario' | 'movel' | 'objeto' | 'pose';
+  type: 'Sala' | 'Avatar' | 'Item' | 'Acessorio' | 'Movel' | 'Pose' | 'Audio' | 'sala' | 'avatar' | 'item' | 'acessorio' | 'cenario' | 'movel' | 'objeto' | 'pose' | 'audio';
   createdAt?: string;
   isScenario?: boolean;
   isAccessory?: boolean;
   actions?: ObjectAction[];
+  isActionAsset?: boolean;
   accessoryAttachment?: AccessoryAttachmentPoint;
   accessoryTransform?: AccessoryTransform;
   fileBlobUrl?: string;
   modelType?: 'sofa' | 'table' | 'chair' | 'plant' | 'house' | 'custom_glb' | 'avatar' | 'acessorio';
   rawDimensions?: [number, number, number];
   isMissingAsset?: boolean;
+  isAudio?: boolean;
+  audioAssetId?: string;
+  audioUrl?: string;
+  audioIsRadio?: boolean;
   // Specific placed object instance being published (disambiguates duplicates of the same asset)
   sourceObjectId?: string;
 }
@@ -149,12 +159,15 @@ export interface AudioPlaylistItem {
   artist?: string;
   duration?: number;
   isRadio?: boolean;
+  ownerSessionId?: string;
 }
 
 export interface RoomEditorState {
   id: string;
   name: string;
   ownerUserId?: string;
+  isPrivate?: boolean;
+  purchasedFromStoreItemId?: string;
   sceneAssetId: string | null;
   sceneAssetBlobUrl?: string;
   placedObjects: PlacedObject[];
@@ -173,6 +186,8 @@ export interface CreatorUser {
   id: string;
   email: string;
   displayName: string;
+  username?: string;
+  avatarUrl?: string;
   isGuest: boolean;
 }
 
@@ -248,6 +263,7 @@ export interface AvatarPose {
   pendingAvatarKey?: string;
   pendingAvatarName?: string;
   access?: PoseAccess;
+  actions?: ObjectAction[];
 }
 
 export interface Spot {
@@ -283,6 +299,9 @@ export interface RoomData {
   isFromEditor?: boolean;
   editorRoom?: RoomEditorState;
   isPlaytest?: boolean;
+  isPrivate?: boolean;
+  privateOwnerUserId?: string;
+  privateOwnerSessionId?: string;
   assetId?: string;
   isMissingAsset?: boolean;
   radioUrl?: string;
@@ -296,6 +315,8 @@ export interface RoomData {
 export interface ChatMessage {
   id: string;
   user: string;
+  senderUserId?: string;
+  username?: string;
   avatarUrl?: string;
   text: string;
   time: string;
@@ -365,8 +386,12 @@ export interface CustomizationItem {
   accessoryTransform?: AccessoryTransform;
   isLockedPosition?: boolean;
   actions?: ObjectAction[];
+  isActionAsset?: boolean;
   activeActionId?: string | null;
   isMissingAsset?: boolean;
+  isAudio?: boolean;
+  audioUrl?: string;
+  audioIsRadio?: boolean;
 }
 
 export interface StoreAvatar {
@@ -419,6 +444,7 @@ export interface AvatarPoseConfig {
   pendingAvatarKey?: string;
   pendingAvatarName?: string;
   bundledInPack?: boolean;
+  actions?: ObjectAction[];
 }
 
 export interface RoomAccessSlot {

@@ -34,6 +34,7 @@ import {
   Edit3,
   Zap,
   Info,
+  Music2,
 } from 'lucide-react';
 import {
   ActionSpeedKeyframe,
@@ -84,6 +85,7 @@ interface CreatorSidebarProps {
   onOpenPublicationsModal?: () => void;
   publishedCount?: number;
   onOpenUploadModal: () => void;
+  onOpenAudioUploadModal?: () => void;
   onInsertAssetToScene: (asset: InventoryItem) => void;
   onAddSpot: (type: SpotType, name: string) => void;
   onRenameSpot?: (id: string, name: string) => void;
@@ -158,6 +160,7 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
   onOpenPublicationsModal,
   publishedCount,
   onOpenUploadModal,
+  onOpenAudioUploadModal,
   onInsertAssetToScene,
   onAddSpot,
   onRenameSpot,  onRemoveSpot,
@@ -2549,6 +2552,17 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
           >
             <Upload className="w-4 h-4" />
           </button>
+          {onOpenAudioUploadModal && (
+            <button
+              type="button"
+              onClick={onOpenAudioUploadModal}
+              className="w-8 h-8 rounded-lg border border-cyan-400/50 bg-cyan-400/10 text-cyan-200 hover:bg-cyan-400/20 flex items-center justify-center cursor-pointer transition-all"
+              title="Enviar áudio ou link de rádio"
+              aria-label="Enviar áudio ou link de rádio"
+            >
+              <Music2 className="w-4 h-4" />
+            </button>
+          )}
 
           {inventory.length > 0 && (
             <>

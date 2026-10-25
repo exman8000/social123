@@ -21,9 +21,11 @@ import {
 import { RoomData, CreatorUser, RoomMovementSettings } from '../types';
 import { toggleRoomLike } from '../lib/database';
 import { RoomStoreShowroom3D, RoomStoreProduct } from './RoomStoreShowroom3D';
+import type { FriendConnection } from '../lib/friends';
 
 interface LobbyViewProps {
   rooms: RoomData[];
+  privateRooms?: RoomData[];
   selectedRoomIndex: number;
   onSelectRoomIndex: (index: number) => void;
   onEnterRoom: (room: RoomData) => void;
@@ -32,6 +34,7 @@ interface LobbyViewProps {
   onOpenEditor?: () => void;
   user?: CreatorUser | null;
   onOpenAuthModal?: () => void;
+  onOpenProfile?: () => void;
   onOpenCustomization?: () => void;
   onLogout?: () => void;
   movementSettings: RoomMovementSettings;
@@ -41,10 +44,16 @@ interface LobbyViewProps {
   storeError: string | null;
   coins: number | null;
   onPurchaseStoreItem: (productId: string) => Promise<unknown>;
+  wishlistItemIds: string[];
+  friends: FriendConnection[];
+  onToggleWishlist: (productId: string) => Promise<void>;
+  onOpenWishlist: () => void;
+  onGiftProduct: (product: RoomStoreProduct) => void;
 }
 
 export const LobbyView: React.FC<LobbyViewProps> = ({
   rooms,
+  privateRooms = [],
   selectedRoomIndex,
   onSelectRoomIndex,
   onEnterRoom,
@@ -53,6 +62,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   onOpenEditor,
   user,
   onOpenAuthModal,
+  onOpenProfile,
   onOpenCustomization,
   onLogout,
   movementSettings,
@@ -62,8 +72,18 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   storeError,
   coins,
   onPurchaseStoreItem,
+  wishlistItemIds,
+  friends,
+  onToggleWishlist,
+  onOpenWishlist,
+  onGiftProduct,
 }) => {
-  const activeRoom = rooms[selectedRoomIndex] || rooms[1] || rooms[0];
+  const [roomCollection, setRoomCollection] = useState<'public' | 'private'>('public');
+  const displayedRooms = roomCollection === 'public' ? rooms : privateRooms;
+  const roomCount = Math.max(displayedRooms.length, 1);
+  const displayedRoomIndex = selectedRoomIndex % roomCount;
+  const activeDisplayedRoom =
+    displayedRooms[displayedRoomIndex] || displayedRooms[0] || null;
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isStore3DOpen, setIsStore3DOpen] = useState(false);
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
@@ -114,9 +134,9 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   // If the user uploads a new room, it can also be viewed by cycling or selecting!
 
   const portalSlots = [
-    { index: (selectedRoomIndex - 1 + rooms.length) % rooms.length, pos: 'left' },
-    { index: selectedRoomIndex, pos: 'center' },
-    { index: (selectedRoomIndex + 1) % rooms.length, pos: 'right' },
+    { index: (displayedRoomIndex - 1 + roomCount) % roomCount, pos: 'left' },
+    { index: displayedRoomIndex, pos: 'center' },
+    { index: (displayedRoomIndex + 1) % roomCount, pos: 'right' },
   ];
 
   return (
@@ -145,17 +165,18 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           Profile (Luzenne, Nv. 12, Level Bar) on left | Gold Coins, Gems, Login, Modo Criador on right */}
       <header className="relative z-30 flex flex-wrap items-center justify-between px-3 sm:px-8 pt-3 sm:pt-6 pointer-events-auto gap-2">
         {/* Profile Card - clickable to open Auth/Profile */}
-        <div
-          onClick={onOpenAuthModal}
-          className="flex items-center gap-2 sm:gap-3 cursor-pointer group"
-          title="Minha Conta / Login / Cadastrar"
+        <button
+          type="button"
+          onClick={user && !user.isGuest ? onOpenProfile : onOpenAuthModal}
+          className="flex items-center gap-2 sm:gap-3 cursor-pointer group text-left"
+          title={user && !user.isGuest ? 'Editar perfil público' : 'Entrar ou criar cadastro'}
         >
           {/* Avatar with Gold Ring */}
           <div className="relative flex-shrink-0">
             <div className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-zinc-900 ring-2 ring-[#ffd700] ring-offset-2 ring-offset-black overflow-hidden shadow-[0_0_15px_rgba(255,215,0,0.3)] group-hover:ring-amber-300 transition-all">
               <img
-                src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-                alt="Luzenne"
+                src={user?.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80'}
+                alt={user?.displayName || 'Luzenne'}
                 className="w-full h-full object-cover filter contrast-125 brightness-90 group-hover:scale-105 transition-transform"
                 referrerPolicy="no-referrer"
               />
@@ -174,6 +195,9 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 Nv. 12
               </span>
             </div>
+            {user && !user.isGuest && user.username && (
+              <span className="text-[9px] sm:text-[10px] text-zinc-400">@{user.username}</span>
+            )}
             {/* Gold Progress Bar matching Reference 2 */}
             <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 sm:mt-1">
               <div className="w-20 sm:w-28 h-1 sm:h-1.5 rounded-full bg-black/60 border border-amber-900/40 overflow-hidden">
@@ -187,7 +211,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
               </span>
             </div>
           </div>
-        </div>
+        </button>
 
         {/* Currency & Menu HUD with Login / Cadastro & Loja */}
         <div className="flex items-center gap-3">
@@ -242,14 +266,14 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                 }`}
                 title={
                   user && !user.isGuest
-                    ? `Conectado como ${user.displayName} (${user.email}) - Clique para ver perfil`
+                    ? `Conectado como ${user.displayName} (${user.email})`
                     : 'Fazer Login ou Criar Cadastro'
                 }
               >
                 <div className="w-5 h-5 rounded-full border border-[#d4af37] flex items-center justify-center">
                   <User className="w-3.5 h-3.5 text-[#ffd700]" />
                 </div>
-                <span className="hidden sm:inline">{user && !user.isGuest ? user.displayName : 'Login / Cadastro'}</span>
+                <span className="hidden sm:inline">Login / Cadastro</span>
               </button>
 
               {user && !user.isGuest && onLogout && (
@@ -294,20 +318,53 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
       {/* CENTER 3D PORTAL HALL
           Player standing in foreground looking at the 3 framed portals */}
       <main className="relative flex-1 flex flex-col items-center justify-center px-4">
+        <div className="relative z-20 mb-3 flex items-center gap-2 rounded-xl border border-amber-400/25 bg-black/50 p-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setRoomCollection('public');
+              onSelectRoomIndex(0);
+            }}
+            className={`rounded-lg px-4 py-2 text-xs font-bold transition-colors ${
+              roomCollection === 'public' ? 'bg-amber-400 text-black' : 'text-amber-100 hover:bg-white/10'
+            }`}
+          >
+            Salas públicas
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRoomCollection('private');
+              onSelectRoomIndex(0);
+            }}
+            className={`rounded-lg px-4 py-2 text-xs font-bold transition-colors ${
+              roomCollection === 'private' ? 'bg-amber-400 text-black' : 'text-amber-100 hover:bg-white/10'
+            }`}
+          >
+            Salas privadas ({privateRooms.length})
+          </button>
+        </div>
         {/* 3D Perspective Portals Container */}
         <div className="relative w-full max-w-5xl flex items-center justify-center gap-2 sm:gap-4 md:gap-8 perspective-[1200px] z-10 pt-2 px-2 sm:px-4">
           {/* Mobile Previous Button */}
           <button
             type="button"
-            onClick={() => onSelectRoomIndex((selectedRoomIndex - 1 + rooms.length) % rooms.length)}
-            className="sm:hidden absolute left-1 z-30 p-2 rounded-full bg-black/70 border border-[#ffd700]/50 text-[#ffd700] cursor-pointer"
+            onClick={() => onSelectRoomIndex((displayedRoomIndex - 1 + roomCount) % roomCount)}
+            disabled={displayedRooms.length < 2}
+            className="sm:hidden absolute left-1 z-30 p-2 rounded-full bg-black/70 border border-[#ffd700]/50 text-[#ffd700] cursor-pointer disabled:opacity-40"
             title="Sala anterior"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
 
-          {portalSlots.map((slot, i) => {
-            const room = rooms[slot.index];
+          {displayedRooms.length === 0 ? (
+            <div className="flex min-h-64 w-full max-w-sm flex-col items-center justify-center rounded-2xl border border-dashed border-amber-400/30 bg-black/45 p-6 text-center">
+              <span className="text-3xl">🔒</span>
+              <p className="mt-3 text-sm font-bold text-amber-100">Nenhuma sala privada ainda</p>
+              <p className="mt-1 text-xs text-zinc-400">Compre uma sala e use “Editar sala” em Itens comprados para criar sua cópia privada.</p>
+            </div>
+          ) : portalSlots.map((slot) => {
+            const room = displayedRooms[slot.index];
             const isCenter = slot.pos === 'center';
             const isLeft = slot.pos === 'left';
             const isRight = slot.pos === 'right';
@@ -348,7 +405,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0 ml-1">
                         {/* Curtir pela Vitrine */}
-                        <button
+                        {roomCollection === 'public' && <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -363,7 +420,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
                         >
                           <Heart className={`w-3 h-3 ${likedRoomIds.includes(room.id) ? 'fill-rose-500 text-rose-500' : 'text-zinc-400'}`} />
                           <span>{roomLikesMap[room.id] ?? room.likesCount ?? 0}</span>
-                        </button>
+                        </button>}
                         <span className="text-[11px] font-mono text-amber-400/90 font-semibold">
                           {room.occupation}
                         </span>
@@ -427,8 +484,9 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           {/* Mobile Next Button */}
           <button
             type="button"
-            onClick={() => onSelectRoomIndex((selectedRoomIndex + 1) % rooms.length)}
-            className="sm:hidden absolute right-1 z-30 p-2 rounded-full bg-black/70 border border-[#ffd700]/50 text-[#ffd700] cursor-pointer"
+            onClick={() => onSelectRoomIndex((displayedRoomIndex + 1) % roomCount)}
+            disabled={displayedRooms.length < 2}
+            className="sm:hidden absolute right-1 z-30 p-2 rounded-full bg-black/70 border border-[#ffd700]/50 text-[#ffd700] cursor-pointer disabled:opacity-40"
             title="Próxima sala"
           >
             <ChevronRight className="w-5 h-5" />
@@ -437,11 +495,11 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
 
         {/* PROMINENT "ENTRAR" BUTTON matching Reference 2
             Positioned right below the highlighted center portal */}
-        <div className="relative z-20 mt-4 flex flex-col items-center">
+        {activeDisplayedRoom && <div className="relative z-20 mt-4 flex flex-col items-center">
           <button
             id="enter-highlighted-room-btn"
             type="button"
-            onClick={() => onEnterRoom(activeRoom)}
+            onClick={() => onEnterRoom(activeDisplayedRoom)}
             className="group relative px-10 py-3 rounded-lg bg-gradient-to-b from-[#2a2214] via-[#1a150c] to-[#0d0a06] border-2 border-[#ffd700] text-amber-300 font-serif font-bold text-lg tracking-widest shadow-[0_0_25px_rgba(255,215,0,0.45)] hover:shadow-[0_0_40px_rgba(255,215,0,0.7)] hover:text-white transition-all transform hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-3"
           >
             {/* Corner Ornamental Accents */}
@@ -450,10 +508,10 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
             <span className="w-1.5 h-1.5 absolute -bottom-1 -left-1 bg-[#ffd700] rotate-45" />
             <span className="w-1.5 h-1.5 absolute -bottom-1 -right-1 bg-[#ffd700] rotate-45" />
 
-            <span className="relative z-10">ENTRAR</span>
+            <span className="relative z-10">{roomCollection === 'private' ? 'ABRIR SALA PRIVADA' : 'ENTRAR'}</span>
             <Sparkles className="w-4 h-4 text-[#ffd700] group-hover:rotate-12 transition-transform" />
           </button>
-        </div>
+        </div>}
 
         {/* Foreground Standing Player Silhouette seen from behind
             "O jogador está em pé olhando 3 portais-moldura 3D das salas" (Reference 2) */}
@@ -759,6 +817,11 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
           assetAccessKey={user?.id || null}
           purchasingProductId={purchasingProductId}
           onPurchase={handlePurchaseStoreItem}
+          wishlistItemIds={wishlistItemIds}
+          friends={friends}
+          onToggleWishlist={onToggleWishlist}
+          onOpenWishlist={onOpenWishlist}
+          onGiftProduct={onGiftProduct}
           onBackToRoom={() => setIsStore3DOpen(false)}
           onOpenInventory={handleOpenInventory}
           backLabel="Voltar ao lobby"

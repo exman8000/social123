@@ -30,6 +30,8 @@ import {
   Layers,
   GripVertical,
   Save,
+  Heart,
+  Gift,
 } from 'lucide-react';
 import {
   CustomizationItem,
@@ -53,9 +55,11 @@ interface UserCustomizationViewProps {
   onBackToLobby: () => void;
   user: CreatorUser | null;
   onOpenAuthModal: () => void;
-  initialTab?: 'loja' | 'inventario' | 'poses';
+  initialTab?: 'loja' | 'inventario' | 'poses' | 'comprados';
   hideStoreTab?: boolean;
   userInventory: InventoryItem[];
+  availableActions?: InventoryItem[];
+  onEditPurchasedRoom?: (item: InventoryItem) => void;
   customizationItems: CustomizationItem[];
   storeAvatars: StoreAvatar[];
   coins: number | null;
@@ -72,6 +76,7 @@ interface UserCustomizationViewProps {
   onRemoveItemFromInventory: (itemId: string) => void;
   onApplyPose: (poseId: string) => void;
   onRemovePose: (poseId: string) => void;
+  onTogglePoseAction?: (poseId: string, action: ObjectAction, attached: boolean) => void;
   onPublishCustomItem: (item: Partial<CustomizationItem>) => void;
   onSelectActiveAvatar?: (avatarId: string) => void;
   onLogout?: () => void;
@@ -82,6 +87,10 @@ interface UserCustomizationViewProps {
   onStoreItemPreviewed?: () => void;
   previewStoreAvatarId?: string | null;
   onStoreAvatarPreviewed?: () => void;
+  wishlistItemIds: string[];
+  onToggleWishlistItem: (productId: string) => Promise<void>;
+  onOpenWishlist: () => void;
+  onGiftStoreItem: (productId: string) => void;
 }
 
 import { safeLocalStorageSet } from '../lib/storageUtils';
@@ -96,6 +105,8 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   initialTab = 'inventario',
   hideStoreTab = false,
   userInventory,
+  availableActions = [],
+  onEditPurchasedRoom,
   customizationItems,
   storeAvatars,
   coins,
@@ -112,6 +123,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   onRemoveItemFromInventory,
   onApplyPose,
   onRemovePose,
+  onTogglePoseAction,
   onPublishCustomItem,
   onSelectActiveAvatar,
   onLogout,
@@ -122,9 +134,13 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   onStoreItemPreviewed,
   previewStoreAvatarId,
   onStoreAvatarPreviewed,
+  wishlistItemIds,
+  onToggleWishlistItem,
+  onOpenWishlist,
+  onGiftStoreItem,
 }: UserCustomizationViewProps) => {
   // Navigation Tabs: 'loja' | 'inventario' | 'poses'
-  const [activeTab, setActiveTab] = useState<'loja' | 'inventario' | 'poses'>(
+  const [activeTab, setActiveTab] = useState<'loja' | 'inventario' | 'poses' | 'comprados'>(
     hideStoreTab && initialTab === 'loja' ? 'inventario' : initialTab
   );
   const [isPedestalFocusMode, setIsPedestalFocusMode] = useState(false);
@@ -330,6 +346,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   const [gizmoMode, setGizmoMode] = useState<'mover' | 'rodar' | 'escalar'>('mover');
   const [isPositionLocked, setIsPositionLocked] = useState<boolean>(false);
   const [activeAction, setActiveAction] = useState<ObjectAction | null>(null);
+  const [poseTargetsByAction, setPoseTargetsByAction] = useState<Record<string, string>>({});
   const [isActionPanelMinimized, setIsActionPanelMinimized] = useState(false);
 
   // Categories in Inventário (including Acessórios!)
@@ -342,7 +359,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedLojaCategory, setSelectedLojaCategory] = useState<
-    'todos' | 'acessorios' | 'avatar' | 'poses' | 'itens'
+    'todos' | 'acessorios' | 'avatar' | 'poses' | 'itens' | 'actions'
   >('todos');
 
   // Modal de publicação
@@ -361,6 +378,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
   const [publishAttachment, setPublishAttachment] =
     useState<AccessoryAttachmentPoint>('companion_float');
   const [publishActions, setPublishActions] = useState<ObjectAction[]>([]);
+  const [publishAttachedActionItemIds, setPublishAttachedActionItemIds] = useState<string[]>([]);
 
   // 3D Model source selection for publish persistence
   const [publishModelSourceType, setPublishModelSourceType] = useState<
@@ -415,7 +433,8 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
     if (
       selectedLojaCategory === 'acessorios' ||
       selectedLojaCategory === 'poses' ||
-      selectedLojaCategory === 'itens'
+      selectedLojaCategory === 'itens' ||
+      selectedLojaCategory === 'actions'
     ) {
       return false;
     }
@@ -429,8 +448,9 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
     if (!isRealPublishedItem(i)) return false;
     const isAccessory = isAccessoryItem(i);
     if (selectedLojaCategory === 'avatar' || selectedLojaCategory === 'poses') return false;
-    if (selectedLojaCategory === 'acessorios' && !isAccessory) return false;
-    if (selectedLojaCategory === 'itens' && isAccessory) return false;
+    if (selectedLojaCategory === 'actions' && !i.isActionAsset) return false;
+    if (selectedLojaCategory === 'acessorios' && (!isAccessory || i.isActionAsset)) return false;
+    if (selectedLojaCategory === 'itens' && (isAccessory || i.isActionAsset)) return false;
     if (selectedTag === '#acessorios' && !isAccessory) return false;
     const matchesSearch = (i.name || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesSearch;
@@ -443,7 +463,8 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
     if (
       selectedLojaCategory === 'avatar' ||
       selectedLojaCategory === 'acessorios' ||
-      selectedLojaCategory === 'itens'
+      selectedLojaCategory === 'itens' ||
+      selectedLojaCategory === 'actions'
     ) {
       return false;
     }
@@ -779,6 +800,16 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
 
     const isAccessory = publishObjectType === 'acessorio';
     const isPose = publishObjectType === 'pose';
+    const attachedPoseActions = isPose
+      ? availableActions
+          .filter((item) => publishAttachedActionItemIds.includes(item.storeItemId || item.id))
+          .flatMap((item) =>
+            (item.actions || []).map((action) => ({
+              ...action,
+              sourceStoreItemId: item.storeItemId || item.id,
+            }))
+          )
+      : [];
     const associatedNames = storeAvatars
       .filter((avatar) => publishAssociatedAvatarIds.includes(avatar.id))
       .map((avatar) => avatar.name);
@@ -812,7 +843,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
       description: publishDescription.trim() || `Item 3D criado por ${user.displayName}.`,
       author: user.displayName,
       associatedAvatarIds: isPose ? publishAssociatedAvatarIds : undefined,
-      actions: isAccessory ? publishActions : [],
+      actions: isAccessory ? publishActions : attachedPoseActions,
       accessoryAttachment: isAccessory ? publishAttachment : undefined,
       accessoryTransform,
       metadata: {
@@ -822,7 +853,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
         isAccessory,
         accessoryAttachment: isAccessory ? publishAttachment : undefined,
         accessoryTransform,
-        actions: isAccessory ? publishActions : [],
+        actions: isAccessory ? publishActions : attachedPoseActions,
       },
     }, user);
 
@@ -861,6 +892,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
         associatedAvatarNames: associatedNames,
         access: 'requires_avatar',
         rarity: publishMode === 'simples' ? 'COMUM' : publishRarity,
+        actions: attachedPoseActions,
       };
       onPublishPose?.(newPose);
     } else {
@@ -1093,6 +1125,23 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
             Inventário
             {activeTab === 'inventario' && (
               <span className="absolute bottom-0 inset-x-0 h-0.5 bg-white shadow-[0_0_8px_#ffffff]" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsPedestalFocusMode(false);
+              setActiveTab('comprados');
+              setSelectedItemToInspect(null);
+            }}
+            className={`relative py-5 transition-colors cursor-pointer ${
+              activeTab === 'comprados' ? 'text-zinc-100 font-semibold' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Comprados
+            {activeTab === 'comprados' && (
+              <span className="absolute bottom-0 inset-x-0 h-0.5 bg-[#ffd700] shadow-[0_0_8px_#ffd700]" />
             )}
           </button>
 
@@ -1723,6 +1772,121 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                 )}
               </div>
             </div>
+          ) : activeTab === 'comprados' ? (
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="mb-4">
+                <h2 className="text-sm font-serif tracking-wide text-zinc-200">Itens comprados</h2>
+                <p className="mt-1 text-xs text-zinc-400">
+                  Suas aquisições da loja ficam aqui. Salas compradas podem ser editadas como cópias privadas.
+                </p>
+              </div>
+              {inventoryLoading && <p className="py-4 text-xs text-zinc-400">Carregando itens comprados…</p>}
+              {inventoryError && <p role="alert" className="pb-3 text-xs text-red-300">{inventoryError}</p>}
+              {!inventoryLoading && !userInventory.some((item) => item.isPurchased) && (
+                <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-6 text-center">
+                  <p className="text-sm font-semibold text-zinc-200">Nenhum item comprado ainda</p>
+                  <p className="mt-1 text-xs text-zinc-500">Os itens adquiridos na Loja aparecerão nesta seção.</p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-3">
+                {userInventory.filter((item) => item.isPurchased).map((item) => {
+                  const isRoom = item.type.toLowerCase() === 'sala' || item.type.toLowerCase() === 'cenario';
+                  const action = item.isActionAsset ? item.actions?.[0] : undefined;
+                  const ownedPoses = poses.filter((pose) => pose.owned);
+                  const actionKey = item.storeItemId || item.id;
+                  const selectedPoseId = poseTargetsByAction[actionKey] || ownedPoses[0]?.id || '';
+                  const selectedPose = ownedPoses.find((pose) => pose.id === selectedPoseId);
+                  const attached = Boolean(
+                    action &&
+                    selectedPose?.actions?.some(
+                      (poseAction) => poseAction.sourceStoreItemId === actionKey || poseAction.id === action.id
+                    )
+                  );
+                  return (
+                    <article
+                      key={`purchased-${item.storeItemId || item.id}`}
+                      className="flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-[#121317] p-3"
+                    >
+                      <div className="h-16 w-20 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/40">
+                        {item.thumbUrl ? (
+                          <img
+                            src={item.thumbUrl}
+                            alt=""
+                            className="h-full w-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-2xl">{isRoom ? '🏠' : '📦'}</div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate text-xs font-bold text-zinc-100">{item.displayName || item.name}</h3>
+                        <p className="mt-1 text-[10px] text-emerald-300">
+                          Comprado · {isRoom ? 'Sala editável' : item.type}
+                        </p>
+                      </div>
+                      {isRoom && (
+                        <button
+                          type="button"
+                          onClick={() => onEditPurchasedRoom?.(item)}
+                          className="shrink-0 rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-[10px] font-bold text-amber-200 hover:bg-amber-400 hover:text-black"
+                        >
+                          Editar sala
+                        </button>
+                      )}
+                      {item.isActionAsset && action && (
+                        <div className="w-full basis-full rounded-lg border border-cyan-400/20 bg-cyan-950/20 p-3">
+                          <p className="text-[10px] font-semibold text-cyan-200">
+                            Action comprada: {action.name}
+                          </p>
+                          {ownedPoses.length > 0 ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <select
+                                value={selectedPoseId}
+                                onChange={(event) =>
+                                  setPoseTargetsByAction((current) => ({
+                                    ...current,
+                                    [actionKey]: event.target.value,
+                                  }))
+                                }
+                                className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#1b1c24] px-2 py-1.5 text-[10px] text-white"
+                              >
+                                {ownedPoses.map((pose) => (
+                                  <option key={pose.id} value={pose.id}>{pose.name}</option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                disabled={!selectedPose || !onTogglePoseAction}
+                                onClick={() =>
+                                  selectedPose &&
+                                  onTogglePoseAction?.(
+                                    selectedPose.id,
+                                    {
+                                      ...action,
+                                      id: action.id,
+                                      sourceStoreItemId: actionKey,
+                                    },
+                                    !attached
+                                  )
+                                }
+                                className="rounded-lg border border-cyan-300/40 px-3 py-1.5 text-[10px] font-bold text-cyan-100 hover:bg-cyan-400/15 disabled:opacity-40"
+                              >
+                                {attached ? 'Desanexar da pose' : 'Anexar à pose'}
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="mt-1 text-[10px] text-zinc-400">
+                              Compre uma pose para anexar esta action.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
           ) : activeTab === 'loja' ? (
             /* TAB: LOJA */
             <div className="flex-1 flex flex-col p-6 overflow-hidden">
@@ -1730,6 +1894,20 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                 <h2 className="text-sm md:text-base font-serif text-zinc-200 tracking-wide">
                   Loja — Avatares & Acessórios
                 </h2>
+                <button
+                  type="button"
+                  onClick={onOpenWishlist}
+                  className="relative rounded-full border border-pink-400/30 bg-pink-500/10 p-2 text-pink-200 hover:bg-pink-500/20"
+                  aria-label="Abrir minha wishlist"
+                  title="Minha wishlist"
+                >
+                  <Heart className="h-4 w-4" />
+                  {wishlistItemIds.length > 0 && (
+                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-pink-500 px-1 text-[9px] font-black text-white">
+                      {wishlistItemIds.length}
+                    </span>
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowPublishModal(true)}
@@ -1750,6 +1928,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                   { id: 'avatar', label: 'Avatares', icon: '👤' },
                   { id: 'poses', label: 'Poses', icon: '💃' },
                   { id: 'itens', label: 'Itens 3D', icon: '📦' },
+                  { id: 'actions', label: 'Actions', icon: '⚡' },
                 ].map((cat) => {
                   const isSelected = selectedLojaCategory === cat.id;
                   return (
@@ -1912,6 +2091,40 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                               </span>
                             </div>
 
+                            {!av.owned && (
+                              <div className="mb-2 flex gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void onToggleWishlistItem(av.id);
+                                  }}
+                                  aria-pressed={wishlistItemIds.includes(av.id)}
+                                  title={wishlistItemIds.includes(av.id) ? 'Remover da wishlist' : 'Salvar na wishlist'}
+                                  className={`flex flex-1 items-center justify-center gap-1 rounded-lg border py-1.5 text-[10px] font-semibold ${
+                                    wishlistItemIds.includes(av.id)
+                                      ? 'border-pink-400/50 bg-pink-500/15 text-pink-200'
+                                      : 'border-white/10 text-zinc-300 hover:border-pink-400/40'
+                                  }`}
+                                >
+                                  <Heart className={`h-3.5 w-3.5 ${wishlistItemIds.includes(av.id) ? 'fill-current' : ''}`} />
+                                  Wishlist
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onGiftStoreItem(av.id);
+                                  }}
+                                  title="Presentear um amigo"
+                                  className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-amber-300/25 py-1.5 text-[10px] font-semibold text-amber-200 hover:bg-amber-400/10"
+                                >
+                                  <Gift className="h-3.5 w-3.5" />
+                                  Presentear
+                                </button>
+                              </div>
+                            )}
+
                             {av.owned ? (
                               <div
                                 className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-950/70 py-1.5 text-xs font-semibold text-emerald-200"
@@ -2034,6 +2247,38 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                             <span className="text-[9px] text-zinc-400 uppercase font-mono">
                               {item.category}
                             </span>
+                          </div>
+
+                          <div className="mb-2 flex gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void onToggleWishlistItem(item.id);
+                              }}
+                              aria-pressed={wishlistItemIds.includes(item.id)}
+                              title={wishlistItemIds.includes(item.id) ? 'Remover da wishlist' : 'Salvar na wishlist'}
+                              className={`flex flex-1 items-center justify-center gap-1 rounded-lg border py-1.5 text-[10px] font-semibold ${
+                                wishlistItemIds.includes(item.id)
+                                  ? 'border-pink-400/50 bg-pink-500/15 text-pink-200'
+                                  : 'border-white/10 text-zinc-300 hover:border-pink-400/40'
+                              }`}
+                            >
+                              <Heart className={`h-3.5 w-3.5 ${wishlistItemIds.includes(item.id) ? 'fill-current' : ''}`} />
+                              Wishlist
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onGiftStoreItem(item.id);
+                              }}
+                              title="Presentear um amigo"
+                              className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-amber-300/25 py-1.5 text-[10px] font-semibold text-amber-200 hover:bg-amber-400/10"
+                            >
+                              <Gift className="h-3.5 w-3.5" />
+                              Presentear
+                            </button>
                           </div>
 
                           {openActionMenuItemId === item.id && !!item.actions?.length && (
@@ -2185,6 +2430,40 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                               <GripVertical className="w-2.5 h-2.5 text-[#ffd700]" />
                               <span>Arraste p/ Rooms</span>
                             </div>
+
+                            {!isOwned && (
+                              <div className="mb-2 flex gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void onToggleWishlistItem(pose.id);
+                                  }}
+                                  aria-pressed={wishlistItemIds.includes(pose.id)}
+                                  title={wishlistItemIds.includes(pose.id) ? 'Remover da wishlist' : 'Salvar na wishlist'}
+                                  className={`flex flex-1 items-center justify-center gap-1 rounded-lg border py-1.5 text-[10px] font-semibold ${
+                                    wishlistItemIds.includes(pose.id)
+                                      ? 'border-pink-400/50 bg-pink-500/15 text-pink-200'
+                                      : 'border-white/10 text-zinc-300 hover:border-pink-400/40'
+                                  }`}
+                                >
+                                  <Heart className={`h-3.5 w-3.5 ${wishlistItemIds.includes(pose.id) ? 'fill-current' : ''}`} />
+                                  Wishlist
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onGiftStoreItem(pose.id);
+                                  }}
+                                  title="Presentear um amigo"
+                                  className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-amber-300/25 py-1.5 text-[10px] font-semibold text-amber-200 hover:bg-amber-400/10"
+                                >
+                                  <Gift className="h-3.5 w-3.5" />
+                                  Presentear
+                                </button>
+                              </div>
+                            )}
 
                             <div className="grid grid-cols-2 gap-1.5">
                               <button
@@ -3100,6 +3379,36 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                   ))}
                 </div>
               </div>
+
+              {publishObjectType === 'pose' && availableActions.length > 0 && (
+                <div className="rounded-xl border border-cyan-500/40 bg-cyan-950/20 p-3">
+                  <p className="mb-2 text-xs font-semibold text-cyan-200">Actions compradas para esta pose</p>
+                  <div className="space-y-1.5">
+                    {availableActions.map((actionItem) => {
+                      const actionItemId = actionItem.storeItemId || actionItem.id;
+                      return (
+                        <label key={actionItemId} className="flex items-center gap-2 text-[11px] text-zinc-200">
+                          <input
+                            type="checkbox"
+                            checked={publishAttachedActionItemIds.includes(actionItemId)}
+                            onChange={(event) =>
+                              setPublishAttachedActionItemIds((current) =>
+                                event.target.checked
+                                  ? [...new Set([...current, actionItemId])]
+                                  : current.filter((id) => id !== actionItemId)
+                              )
+                            }
+                          />
+                          <span>{actionItem.displayName || actionItem.name}</span>
+                          <span className="text-[10px] text-cyan-300">
+                            {actionItem.actions?.some((action) => action.kind === 'audio') ? 'Áudio' : 'Movimento'}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {publishObjectType === 'acessorio' && (
                 <div className="p-3 rounded-xl bg-black/60 border border-[#ffd700]/40 space-y-2">

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins, PersonStanding } from 'lucide-react';
+import { Box, LogOut, Sparkles, X, Plus, GripVertical, Check, Heart, MessageSquare, Package, Move3d, Store, LoaderCircle, CheckCircle2, Coins, PersonStanding, Music2, Users } from 'lucide-react';
 import {
   RoomData,
   AvatarPose,
@@ -17,6 +17,7 @@ import {
   ObjectAction,
   RoomMovementSettings,
   InventoryItem,
+  AudioPlaylistItem,
 } from '../types';
 import { INITIAL_POSES, INITIAL_SPOTS, INITIAL_CHAT } from '../data/initialData';
 import { LoungeCanvas3D } from './LoungeCanvas3D';
@@ -30,6 +31,7 @@ import { supabase } from '../lib/supabase';
 import { toggleRoomLike } from '../lib/database';
 import { RoomStoreProduct, RoomStoreShowroom3D } from './RoomStoreShowroom3D';
 import { extractAssetUuid, resolveAssetDownloadUrl } from '../lib/assetSyncClient';
+import type { FriendConnection } from '../lib/friends';
 
 interface RoomViewProps {
   room: RoomData;
@@ -54,6 +56,13 @@ interface RoomViewProps {
   onSelectActiveAvatar?: (avatarId: string) => void;
   onToggleEquipItem?: (itemId: string) => void;
   onApplyPose?: (poseId: string) => void;
+  onOpenFriends?: () => void;
+  friendConnections: FriendConnection[];
+  wishlistItemIds: string[];
+  onToggleWishlist: (productId: string) => Promise<void>;
+  onOpenWishlist: () => void;
+  onGiftProduct: (product: RoomStoreProduct) => void;
+  onViewUserWishlist: (userId: string, displayName: string) => void;
 }
 
 export const RoomView: React.FC<RoomViewProps> = ({
@@ -79,6 +88,13 @@ export const RoomView: React.FC<RoomViewProps> = ({
   onSelectActiveAvatar,
   onToggleEquipItem,
   onApplyPose,
+  onOpenFriends,
+  friendConnections,
+  wishlistItemIds,
+  onToggleWishlist,
+  onOpenWishlist,
+  onGiftProduct,
+  onViewUserWishlist,
 }: RoomViewProps) => {
   // Live Avatar state (can switch dynamically inside room via Room Access Bar!)
   const [liveAvatar, setLiveAvatar] = useState<StoreAvatar | null>(() => {
@@ -152,6 +168,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
         owned: true,
         associatedAvatarIds: o.attachedAvatarIds,
         associatedAvatarNames: linkedAvatarNames,
+        actions: o.actions,
         access: 'requires_avatar' as const,
         isPublishedByCreator: false,
       }));
@@ -174,6 +191,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
             pendingAvatarKey: p.pendingAvatarKey,
             pendingAvatarName: p.pendingAvatarName,
             access: p.access,
+            actions: p.actions,
             sourceObjectId: p.sourceObjectId,
             assetId: p.assetId,
             fileBlobUrl: p.fileBlobUrl,
@@ -287,6 +305,50 @@ export const RoomView: React.FC<RoomViewProps> = ({
     setTimeout(() => setHudToast(null), 3500);
   };
 
+  const shareTemporaryRoomAudio = (track: AudioPlaylistItem) => {
+    const payload = {
+      action: 'play',
+      ownerSessionId: tabSessionId,
+      track,
+    };
+    setTemporaryRoomAudio({ track, ownerSessionId: tabSessionId });
+    if (roomChannelRef.current && roomChannelReadyRef.current) {
+      void roomChannelRef.current.send({
+        type: 'broadcast',
+        event: 'room-audio',
+        payload,
+      }).then((status: string) => {
+        if (status !== 'ok') {
+          console.warn('[Room realtime] Temporary audio broadcast failed:', { status });
+          showHudToast('Não foi possível compartilhar o áudio com os outros usuários.');
+        }
+      }).catch((error: unknown) => {
+        console.warn('[Room realtime] Temporary audio broadcast rejected:', error);
+        showHudToast('Falha de conexão ao compartilhar o áudio.');
+      });
+    } else {
+      showHudToast('Conectando à sala; o áudio será aplicado apenas neste momento.');
+    }
+  };
+
+  const handleSelectPose = (pose: AvatarPose) => {
+    setSelectedPose(pose);
+    const movementAction = pose.actions?.find((action) => action.kind !== 'audio');
+    setActiveAvatarActionId(movementAction?.id || null);
+    const audioAction = pose.actions?.find(
+      (action) => action.kind === 'audio' && typeof action.audioUrl === 'string' && /^https?:\/\/\S+$/i.test(action.audioUrl)
+    );
+    if (!audioAction?.audioUrl) return;
+    shareTemporaryRoomAudio({
+      id: audioAction.sourceStoreItemId || audioAction.id,
+      title: audioAction.name || pose.name,
+      url: audioAction.audioUrl,
+      artist: user?.displayName || 'Usuário',
+      isRadio: audioAction.audioIsRadio,
+    });
+    showHudToast(`Action de áudio "${audioAction.name}" aplicada com a pose.`);
+  };
+
   // Triggering a room access slot
   const handleTriggerAccessSlot = (slot: RoomAccessSlot) => {
     if (slot.type === 'avatar') {
@@ -299,7 +361,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
     } else {
       const targetPose = poses.find((p) => p.id === slot.itemId);
       if (targetPose) {
-        setSelectedPose(targetPose);
+        handleSelectPose(targetPose);
         showHudToast(`💃 Pose alterada para "${targetPose.name}"!`);
       }
     }
@@ -355,12 +417,17 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
   // Chat & Speech Bubbles State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT);
+  const [temporaryRoomAudio, setTemporaryRoomAudio] = useState<{
+    track: AudioPlaylistItem;
+    ownerSessionId: string;
+  } | null>(null);
   const [isMobile, setIsMobile] = useState<boolean>(
     () =>
       typeof window !== 'undefined' &&
       window.matchMedia('(max-width: 767px), (pointer: coarse)').matches
   );
-  const [mobilePanel, setMobilePanel] = useState<'chat' | 'inventory' | 'poses' | 'gizmo' | null>(null);
+  const [mobilePanel, setMobilePanel] = useState<'chat' | 'inventory' | 'poses' | 'audio' | null>(null);
+  const [isMobileGizmoOpen, setIsMobileGizmoOpen] = useState(false);
   const [isStoreOpen, setIsStoreOpen] = useState(false);
   const [isStoreInventoryOpen, setIsStoreInventoryOpen] = useState(false);
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
@@ -412,6 +479,19 @@ export const RoomView: React.FC<RoomViewProps> = ({
   const handleApplyInventoryItem = (item: InventoryItem) => {
     const itemType = item.type.toLowerCase();
     const itemKey = item.storeItemId || item.id;
+    if (item.isAudio && item.audioUrl) {
+      const track: AudioPlaylistItem = {
+        id: item.storeItemId || item.id,
+        title: item.displayName || item.name || 'Áudio',
+        url: item.audioUrl,
+        artist: user?.displayName || 'Usuário',
+        isRadio: item.audioIsRadio,
+      };
+      shareTemporaryRoomAudio(track);
+      setIsStoreInventoryOpen(false);
+      showHudToast(`Áudio "${track.title}" aplicado temporariamente na sala.`);
+      return;
+    }
     if (item.isScenario || ['sala', 'cenario'].includes(itemType)) {
       if (!canTemporarilyReplaceScene) {
         showHudToast('Somente o dono da sala publicada pode trocar o cenário nesta sessão.');
@@ -466,7 +546,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
         onApplyPose?.(pose.id);
       }
       const roomPose = poses.find((candidate) => candidate.id === pose.id);
-      if (roomPose) setSelectedPose(roomPose);
+      if (roomPose) handleSelectPose(roomPose);
       setIsStoreInventoryOpen(false);
       showHudToast(`Pose "${pose.name}" aplicada.`);
       return;
@@ -558,7 +638,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
     const newMsg: ChatMessage = {
       id: messageId,
       user: `${senderName}`,
-      avatarUrl: liveAvatar?.thumb,
+      senderUserId: user?.id,
+      username: user?.username,
+      avatarUrl: user?.avatarUrl,
       text,
       time: 'agora',
       spotId: currentSpotId,
@@ -659,6 +741,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
               playersList.push({
                 userId: key,
                 displayName: latest.displayName || 'Usuário',
+                username: typeof latest.username === 'string' ? latest.username : undefined,
+                avatarUrl: typeof latest.avatarUrl === 'string' ? latest.avatarUrl : undefined,
                 spotId: latest.spotId || 1,
                 position: Array.isArray(latest.position) ? latest.position : undefined,
                 avatar: latest.avatar || null,
@@ -671,7 +755,43 @@ export const RoomView: React.FC<RoomViewProps> = ({
           }
         });
 
+        setTemporaryRoomAudio((current) =>
+          current &&
+          current.ownerSessionId !== tabSessionId &&
+          !Object.prototype.hasOwnProperty.call(state, current.ownerSessionId)
+            ? null
+            : current
+        );
         setRemotePlayers(playersList);
+      })
+      .on('broadcast', { event: 'room-audio' }, ({ payload }) => {
+        if (!payload || typeof payload.ownerSessionId !== 'string') return;
+        if (payload.action === 'stop') {
+          setTemporaryRoomAudio((current) =>
+            current?.ownerSessionId === payload.ownerSessionId ? null : current
+          );
+          return;
+        }
+        if (
+          payload.action !== 'play' ||
+          !payload.track ||
+          typeof payload.track.id !== 'string' ||
+          typeof payload.track.title !== 'string' ||
+          typeof payload.track.url !== 'string' ||
+          !/^https?:\/\/\S+$/i.test(payload.track.url)
+        ) {
+          return;
+        }
+        setTemporaryRoomAudio({
+          ownerSessionId: payload.ownerSessionId,
+          track: {
+            id: payload.track.id,
+            title: payload.track.title,
+            url: payload.track.url,
+            artist: typeof payload.track.artist === 'string' ? payload.track.artist : 'Usuário',
+            isRadio: payload.track.isRadio === true,
+          },
+        });
       })
       .on('broadcast', { event: 'player-state' }, ({ payload }) => {
         if (
@@ -690,6 +810,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
         const remotePlayer: {
           userId: string;
           displayName: string;
+          username?: string;
+          avatarUrl?: string;
           spotId: number;
           position?: [number, number, number];
           avatar?: unknown;
@@ -700,6 +822,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
         } = {
           userId: payload.senderSessionId,
           displayName: typeof payload.displayName === 'string' ? payload.displayName : 'Usuário',
+          ...(typeof payload.username === 'string' ? { username: payload.username } : {}),
+          ...(typeof payload.avatarUrl === 'string' ? { avatarUrl: payload.avatarUrl } : {}),
           spotId: Number.isFinite(Number(payload.spotId)) ? Number(payload.spotId) : 1,
           position,
           ...(payload.avatar !== undefined ? { avatar: payload.avatar } : {}),
@@ -737,6 +861,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
           const message: ChatMessage = {
             id: payload.id,
             user: payload.user,
+            senderUserId: typeof payload.senderUserId === 'string' ? payload.senderUserId : undefined,
+            username: typeof payload.username === 'string' ? payload.username : undefined,
             avatarUrl: typeof payload.avatarUrl === 'string' ? payload.avatarUrl : undefined,
             text: payload.text,
             time: typeof payload.time === 'string' ? payload.time : 'agora',
@@ -826,6 +952,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
   const localPresenceStateRef = React.useRef({
     displayName: user?.displayName || 'Visitante',
+    username: user?.username,
+    avatarUrl: user?.avatarUrl,
     currentSpotId,
     playerPosition,
     spots,
@@ -836,6 +964,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
   });
   localPresenceStateRef.current = {
     displayName: user?.displayName || 'Visitante',
+    username: user?.username,
+    avatarUrl: user?.avatarUrl,
     currentSpotId,
     playerPosition,
     spots,
@@ -889,6 +1019,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
     const playerState = {
       sessionId: tabSessionId,
       displayName: state.displayName,
+      username: state.username,
+      avatarUrl: state.avatarUrl,
       spotId: state.currentSpotId,
       position: state.playerPosition || selectedSpot?.position,
       avatar: state.liveAvatar
@@ -938,11 +1070,20 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
   // Actions created in the editor live on the avatar object; the store avatar may not carry them
   const avatarActions: ObjectAction[] = React.useMemo(
-    () =>
-      effectiveCustomAvatarObject?.actions && effectiveCustomAvatarObject.actions.length > 0
+    () => {
+      const avatarObjectActions =
+        effectiveCustomAvatarObject?.actions && effectiveCustomAvatarObject.actions.length > 0
         ? effectiveCustomAvatarObject.actions
-        : liveAvatar?.actions || [],
-    [liveAvatar?.actions, effectiveCustomAvatarObject?.actions]
+        : liveAvatar?.actions || [];
+      const poseActions = (selectedPose.actions || []).filter((action) => action.kind !== 'audio');
+      return [
+        ...avatarObjectActions,
+        ...poseActions.filter((poseAction) =>
+          !avatarObjectActions.some((avatarAction) => avatarAction.id === poseAction.id)
+        ),
+      ];
+    },
+    [liveAvatar?.actions, effectiveCustomAvatarObject?.actions, selectedPose.actions]
   );
 
   useEffect(() => {
@@ -955,7 +1096,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
     if (roomChannelRef.current && roomChannelReadyRef.current) {
       void trackLocalPlayerPresence(roomChannelRef.current);
     }
-  }, [currentSpotId, liveAvatar, selectedPose, tabSessionId, effectiveCustomAvatarObject, isShopping, user?.displayName]);
+  }, [currentSpotId, liveAvatar, selectedPose, tabSessionId, effectiveCustomAvatarObject, isShopping, user?.displayName, user?.username, user?.avatarUrl]);
 
   const handlePlayerPositionChange = (position: [number, number, number]) => {
     setPlayerPosition(position);
@@ -968,6 +1109,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
         payload: {
           senderSessionId: tabSessionId,
           displayName: user?.displayName || 'Visitante',
+          username: user?.username,
+          avatarUrl: user?.avatarUrl,
           spotId: currentSpotId,
           position,
         },
@@ -1088,6 +1231,16 @@ export const RoomView: React.FC<RoomViewProps> = ({
 
           <button
             type="button"
+            onClick={onOpenFriends}
+            className="hidden h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-black/50 text-zinc-200 hover:border-amber-300/60 hover:text-amber-200 sm:flex"
+            title="Amigos e pessoas online"
+            aria-label="Abrir amigos e usuários online"
+          >
+            <Users className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
             onClick={handleOpenStore}
             className="flex items-center gap-1.5 rounded-full border border-amber-300/45 bg-black/50 px-2.5 py-1.5 text-[10px] font-bold text-amber-200 shadow-lg backdrop-blur hover:bg-amber-400/15 sm:px-3 sm:text-xs"
             title="Entrar na loja 3D sem sair da sala"
@@ -1145,13 +1298,29 @@ export const RoomView: React.FC<RoomViewProps> = ({
         radioUrl={room.radioUrl || room.editorRoom?.radioUrl}
         playlist={room.playlist || room.editorRoom?.playlist}
         roomName={room.name || 'Lounge'}
+        temporaryAudio={temporaryRoomAudio}
+        onTemporaryAudioEnded={() => {
+          const activeAudio = temporaryRoomAudio;
+          setTemporaryRoomAudio(null);
+          if (
+            activeAudio?.ownerSessionId === tabSessionId &&
+            roomChannelRef.current &&
+            roomChannelReadyRef.current
+          ) {
+            void roomChannelRef.current.send({
+              type: 'broadcast',
+              event: 'room-audio',
+              payload: { action: 'stop', ownerSessionId: activeAudio.ownerSessionId },
+            });
+          }
+        }}
       />
 
       {/* TOP-LEFT HUD: 2D/3D Gizmo Widget with Setas & Spot Radius Clamping */}
-      {(!isMobile || mobilePanel === 'gizmo') && (
-      <div className={`absolute ${isMobile ? 'bottom-16 left-3' : 'top-20 left-3 sm:left-6'} z-30 flex flex-col gap-2 pointer-events-auto`}>
+      {(!isMobile || isMobileGizmoOpen) && (
+      <div className={`absolute ${isMobile ? 'top-16 left-3' : 'top-20 left-3 sm:left-6'} z-30 flex flex-col gap-2 pointer-events-auto`}>
         <GizmoWidget
-          onClose={isMobile ? () => setMobilePanel(null) : undefined}
+          onClose={isMobile ? () => setIsMobileGizmoOpen(false) : undefined}
           mode={gizmoMode}
           onCycleMode={handleCycleGizmoMode}
           transform={transform}
@@ -1175,23 +1344,35 @@ export const RoomView: React.FC<RoomViewProps> = ({
           roomName={room.name || 'Lounge'}
           messages={chatMessages}
           onSendMessage={handleSendMessage}
+          currentUserId={user?.id}
+          onViewUserWishlist={onViewUserWishlist}
           embedded={isMobile}
           onClose={() => setMobilePanel(null)}
         />
       )}
 
       {/* SINGLE UNIFIED INVENTORY: Orientation toggleable (Horizontal at bottom / Vertical on left dock) */}
-      {(!isMobile || mobilePanel === 'inventory' || mobilePanel === 'poses') && (
+      {(!isMobile || mobilePanel === 'inventory' || mobilePanel === 'poses' || mobilePanel === 'audio') && (
       <UnifiedRoomInventory
         embedded={isMobile}
-        initialTab={mobilePanel === 'poses' ? 'poses' : mobilePanel === 'inventory' ? 'atalhos' : undefined}
+        initialTab={
+          mobilePanel === 'poses'
+            ? 'poses'
+            : mobilePanel === 'audio'
+              ? 'audio'
+              : mobilePanel === 'inventory'
+                ? 'atalhos'
+                : undefined
+        }
         onClose={() => setMobilePanel(null)}
         slots={roomAccessSlots}
         onUpdateSlots={handleUpdateRoomAccessSlots}
         onSlotClick={handleTriggerAccessSlot}
         poses={poses}
+        audioItems={inventory.filter((item) => item.isAudio && item.audioUrl)}
+        onApplyAudio={handleApplyInventoryItem}
         selectedPoseId={selectedPose.id}
-        onSelectPose={setSelectedPose}
+        onSelectPose={handleSelectPose}
         storeAvatars={storeAvatars}
         activeUserAvatar={liveAvatar}
         onSelectAvatar={(av) => {
@@ -1215,7 +1396,9 @@ export const RoomView: React.FC<RoomViewProps> = ({
             ['chat', MessageSquare, 'Chat'],
             ['inventory', Package, 'Inventário'],
             ['poses', PersonStanding, 'Poses'],
+            ['audio', Music2, 'Áudios'],
             ['gizmo', Move3d, 'Gizmo'],
+            ['friends', Users, 'Amigos'],
             ['shop', Store, 'Loja'],
           ] as const).map(([key, Icon, label]) => (
             <button
@@ -1231,12 +1414,19 @@ export const RoomView: React.FC<RoomViewProps> = ({
                   setIsStoreInventoryOpen(false);
                   setMobilePanel((current) => (current === 'poses' ? null : 'poses'));
                 }
+                else if (key === 'audio') {
+                  setIsStoreInventoryOpen(false);
+                  setMobilePanel((current) => (current === 'audio' ? null : 'audio'));
+                }
+                else if (key === 'gizmo') setIsMobileGizmoOpen((open) => !open);
+                else if (key === 'friends') onOpenFriends?.();
                 else setMobilePanel((current) => (current === key ? null : key));
               }}
-              className={`flex flex-col items-center justify-center min-w-[56px] h-11 rounded-xl text-[10px] font-semibold transition-colors cursor-pointer ${
+              className={`flex flex-col items-center justify-center ${key === 'friends' ? 'min-w-[44px]' : 'min-w-[56px]'} h-11 rounded-xl text-[10px] font-semibold transition-colors cursor-pointer ${
                 (key === 'shop' && isStoreOpen) ||
                 (key === 'inventory' && isStoreInventoryOpen) ||
-                (key !== 'shop' && key !== 'inventory' && mobilePanel === key)
+                (key === 'gizmo' && isMobileGizmoOpen) ||
+                (key !== 'shop' && key !== 'inventory' && key !== 'gizmo' && mobilePanel === key)
                   ? 'bg-[#ffd700] text-black'
                   : 'text-[#ffd700] hover:bg-white/10'
               }`}
@@ -1259,6 +1449,11 @@ export const RoomView: React.FC<RoomViewProps> = ({
           assetAccessKey={user?.id || null}
           purchasingProductId={purchasingProductId}
           onPurchase={handlePurchaseStoreItem}
+          wishlistItemIds={wishlistItemIds}
+          friends={friendConnections.filter((friend) => friend.status === 'accepted')}
+          onToggleWishlist={onToggleWishlist}
+          onOpenWishlist={onOpenWishlist}
+          onGiftProduct={onGiftProduct}
           onBackToRoom={handleReturnToRoom}
           onOpenInventory={() => setIsStoreInventoryOpen(true)}
         />

@@ -31,6 +31,7 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
 }) => {
   const [isActionsOpen, setIsActionsOpen] = React.useState(false);
   const defaultUserPhoto =
+    user?.avatarUrl ||
     activeUserAvatar?.thumb ||
     'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80';
 
@@ -38,7 +39,9 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
     const isPlayer = speakerId === 'self';
     if (isPlayer) {
       return {
-        name: user?.displayName ? `Você (${user.displayName})` : 'Você',
+        name: user?.displayName
+          ? `Você (${user.displayName}${user.username ? ` · @${user.username}` : ''})`
+          : 'Você',
         photo: defaultUserPhoto,
         isPlayer: true,
         isShopping,
@@ -54,6 +57,7 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
 
     if (remoteUser) {
       const userPhoto =
+        remoteUser.avatarUrl ||
         remoteUser.avatar?.thumb ||
         remoteUser.avatar?.asset_url ||
         (typeof remoteUser.avatar?.fileBlobUrl === 'string' && !remoteUser.avatar.fileBlobUrl.startsWith('blob:')
@@ -62,7 +66,9 @@ export const SpeechBubbleOverlay: React.FC<SpeechBubbleOverlayProps> = ({
         defaultUserPhoto;
 
       return {
-        name: remoteUser.displayName || `Usuário ${remoteUser.spotId}`,
+        name: `${remoteUser.displayName || `Usuário ${remoteUser.spotId}`}${
+          remoteUser.username ? ` · @${remoteUser.username}` : ''
+        }`,
         photo: userPhoto,
         isPlayer: false,
         isRemoteUser: true,

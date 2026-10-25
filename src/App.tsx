@@ -6,6 +6,8 @@ import { CreatorEditorCanvas3D } from './components/CreatorEditorCanvas3D';
 import { UploadGLBModal } from './components/UploadGLBModal';
 import { BoundaryModal } from './components/BoundaryModal';
 import { AuthModal } from './components/AuthModal';
+import { UserProfileModal } from './components/UserProfileModal';
+import { AudioUploadModal } from './components/AudioUploadModal';
 import { PublishModal } from './components/PublishModal';
 import { PublishItemModal } from './components/PublishItemModal';
 import { MyPublicationsModal } from './components/MyPublicationsModal';
@@ -14,6 +16,7 @@ import { TrajectoryTimelineModal } from './components/TrajectoryTimelineModal';
 import { ProjectSaveRestoreModal } from './components/ProjectSaveRestoreModal';
 import { LobbyView } from './components/LobbyView';
 import { RoomView } from './components/RoomView';
+import { FriendsModal, OnlineLobbyUser } from './components/FriendsModal';
 import type { RoomStoreProduct } from './components/RoomStoreShowroom3D';
 import { UserCustomizationView } from './components/UserCustomizationView';
 import { INITIAL_ROOMS } from './data/creatorData';
@@ -41,11 +44,13 @@ import {
   RoomMovementSettings,
 } from './types';
 import { supabase } from './lib/supabase';
-import { persistStoreItem, persistShowcaseRoom, fetchPublicStoreItems, fetchPublicShowcaseRooms, fetchUserInventoryFromDatabase, fetchUserWalletFromDatabase, purchaseStoreItemFromDatabase, recordUserInventoryItem, deleteRemoteInventoryItem, clearAllRemoteInventory } from './lib/database';
+import { addOrAcceptFriend, fetchFriendConnections, FriendConnection } from './lib/friends';
+import { persistStoreItem, persistShowcaseRoom, fetchPublicStoreItems, fetchPublicShowcaseRooms, fetchUserInventoryFromDatabase, fetchUserAudioAssets, markUserAudioAssetPublished, fetchUserWalletFromDatabase, purchaseStoreItemFromDatabase, recordUserInventoryItem, deleteRemoteInventoryItem, clearAllRemoteInventory, fetchWishlistStoreItemIds, setWishlistStoreItem, purchaseStoreItemAsGift } from './lib/database';
 import { getGlbFile, saveGlbFile, deleteGlbFile, clearAllGlbFiles } from './lib/storageIndexedDB';
 import { safeLocalStorageSet, sanitizeItemsForStorage } from './lib/storageUtils';
 import { fetchRemoteInventory } from './lib/assetSyncClient';
 import { Lightbulb, Sparkles, Maximize2, Minimize2 } from 'lucide-react';
+import { StoreSocialModal, StoreSocialModalState } from './components/StoreSocialModal';
 
 const getStoredCreatorUserId = () => {
   try {
@@ -58,6 +63,10 @@ const getStoredCreatorUserId = () => {
 
 const activeAvatarStorageKey = (userId: string) => `3d_social_creator_active_avatar_id:${userId}`;
 const accountDataStorageKey = (userId: string) => `3d_social_account_data:${userId}`;
+const poseActionAttachmentStorageKey = (userId: string) =>
+  `3d_social_pose_action_attachments:${userId}`;
+const poseActionExclusionStorageKey = (userId: string) =>
+  `3d_social_pose_action_exclusions:${userId}`;
 const magneticSnapDefaultMigrationKey = (userId: string) =>
   `3d_social_room_movement_magnetic_default_v1:${userId}`;
 
@@ -122,6 +131,33 @@ export const App: React.FC = () => {
   const [customizationPreviewAvatarId, setCustomizationPreviewAvatarId] = useState<string | null>(null);
   const [lobbyRoomIndex, setLobbyRoomIndex] = useState<number>(1);
   const [selectedLobbyRoom, setSelectedLobbyRoom] = useState<RoomData | null>(null);
+  const [isFriendsModalOpen, setIsFriendsModalOpen] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<OnlineLobbyUser[]>([]);
+  const [onlinePresenceReady, setOnlinePresenceReady] = useState(false);
+  const [friendConnections, setFriendConnections] = useState<FriendConnection[]>([]);
+  const [isLoadingFriends, setIsLoadingFriends] = useState(false);
+  const [storeSocialModal, setStoreSocialModal] = useState<StoreSocialModalState | null>(null);
+  const [wishlistItemIds, setWishlistItemIds] = useState<string[]>([]);
+  const [socialWishlistItemIds, setSocialWishlistItemIds] = useState<string[]>([]);
+  const [isSocialWishlistLoading, setIsSocialWishlistLoading] = useState(false);
+  const [incomingRoomInvite, setIncomingRoomInvite] = useState<{
+    senderName: string;
+    roomId: string;
+    roomName: string;
+    roomData?: RoomData;
+    ownerSessionId?: string;
+  } | null>(null);
+  const appSessionId = React.useMemo(() => crypto.randomUUID(), []);
+  const onlineChannelRef = React.useRef<any>(null);
+  const onlineChannelReadyRef = React.useRef(false);
+  const onlinePresenceRef = React.useRef<{
+    userId?: string;
+    displayName: string;
+    username?: string;
+    avatarUrl?: string;
+    roomId?: string;
+    roomName?: string;
+  }>({ displayName: 'Visitante' });
 
   const [customizationItems, setCustomizationItems] = useState<CustomizationItem[]>([]);
   const [storeAvatars, setStoreAvatars] = useState<StoreAvatar[]>([]);
@@ -137,6 +173,8 @@ export const App: React.FC = () => {
     ) || null;
 
   const [avatarPoses, setAvatarPoses] = useState<AvatarPoseConfig[]>([]);
+  const [poseActionAttachments, setPoseActionAttachments] = useState<Record<string, ObjectAction[]>>({});
+  const [poseActionExclusions, setPoseActionExclusions] = useState<Record<string, string[]>>({});
 
   // Room Access Inventory (Slots 1-8 de Acesso Rápido para Rooms)
   const [roomAccessSlots, setRoomAccessSlots] = useState<RoomAccessSlot[]>(() => {
@@ -201,11 +239,282 @@ export const App: React.FC = () => {
   const [storeError, setStoreError] = useState<string | null>(null);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
+
+  const attachableActionInventory = inventory.flatMap((item) => {
+    const sourceStoreItemId = item.storeItemId || item.id;
+    if (item.isActionAsset && item.actions?.length) {
+      return [{
+        ...item,
+        actions: item.actions.map((action) => ({
+          ...action,
+          sourceStoreItemId: action.sourceStoreItemId || sourceStoreItemId,
+        })),
+      }];
+    }
+    if (item.isAudio && item.audioUrl) {
+      return [{
+        ...item,
+        isActionAsset: true,
+        actions: [{
+          id: `audio-action-${sourceStoreItemId}`,
+          name: item.displayName || item.name || 'Action de áudio',
+          kind: 'audio' as const,
+          audioUrl: item.audioUrl,
+          audioIsRadio: item.audioIsRadio,
+          sourceStoreItemId,
+          motion: {
+            enabled: true,
+            deltaPosition: [0, 0, 0] as [number, number, number],
+            speed: 1,
+            loop: false,
+            target: 'parent_object' as const,
+          },
+        }],
+      }];
+    }
+    return [];
+  });
   const [inventoryRevision, setInventoryRevision] = useState(0);
   const loadedStoreAccountIdRef = React.useRef<string | null>(null);
 
   // User Auth State
   const [user, setUser] = useState<CreatorUser | null>(null);
+  onlinePresenceRef.current = {
+    ...(user && !user.isGuest ? { userId: user.id } : {}),
+    displayName: user?.displayName || 'Visitante',
+    ...(user?.username ? { username: user.username } : {}),
+    ...(user?.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
+    ...(currentScreen === 'room' && selectedLobbyRoom
+      ? { roomId: selectedLobbyRoom.id, roomName: selectedLobbyRoom.name }
+      : {}),
+  };
+
+  const trackOnlinePresence = () => {
+    if (!onlineChannelRef.current || !onlineChannelReadyRef.current) return;
+    void onlineChannelRef.current.track({
+      sessionId: appSessionId,
+      ...onlinePresenceRef.current,
+    }).then((status: string) => {
+      if (status !== 'ok') console.warn('[Online presence] Presence update failed:', { status });
+    }).catch((error: unknown) => {
+      console.warn('[Online presence] Presence update rejected:', error);
+    });
+  };
+
+  useEffect(() => {
+    const channel = supabase.channel('social-online-users', {
+      config: { presence: { key: appSessionId } },
+    });
+    onlineChannelRef.current = channel;
+    const syncOnlineUsers = () => {
+      const nextUsers: OnlineLobbyUser[] = [];
+      const state = channel.presenceState();
+      Object.entries(state).forEach(([sessionId, entries]) => {
+        if (sessionId === appSessionId || !entries.length) return;
+        const latest = entries[entries.length - 1] as Record<string, unknown>;
+        if (typeof latest.displayName !== 'string') return;
+        nextUsers.push({
+          sessionId,
+          ...(typeof latest.userId === 'string' ? { userId: latest.userId } : {}),
+          displayName: latest.displayName,
+          ...(typeof latest.username === 'string' ? { username: latest.username } : {}),
+          ...(typeof latest.avatarUrl === 'string' ? { avatarUrl: latest.avatarUrl } : {}),
+          ...(typeof latest.roomId === 'string' ? { roomId: latest.roomId } : {}),
+          ...(typeof latest.roomName === 'string' ? { roomName: latest.roomName } : {}),
+        });
+      });
+      const uniqueUsers = new Map<string, OnlineLobbyUser>();
+      nextUsers.forEach((onlineUser) => {
+        const key = onlineUser.userId || onlineUser.sessionId;
+        const existing = uniqueUsers.get(key);
+        if (!existing || (!existing.roomId && onlineUser.roomId)) {
+          uniqueUsers.set(key, onlineUser);
+        }
+      });
+      setOnlineUsers(Array.from(uniqueUsers.values()).sort((left, right) =>
+        left.displayName.localeCompare(right.displayName)
+      ));
+      setOnlinePresenceReady(true);
+    };
+
+    channel
+      .on('presence', { event: 'sync' }, syncOnlineUsers)
+      .on('broadcast', { event: 'room-invite' }, ({ payload }) => {
+        const addressedToSession =
+          typeof payload?.recipientSessionId === 'string' &&
+          payload.recipientSessionId === appSessionId;
+        const addressedToUser =
+          typeof payload?.recipientUserId === 'string' &&
+          payload.recipientUserId === user?.id;
+        const invitedRoom = payload?.roomData;
+        const isValidPrivateRoom =
+          invitedRoom &&
+          typeof invitedRoom === 'object' &&
+          invitedRoom.isPrivate === true &&
+          invitedRoom.id === payload.roomId &&
+          invitedRoom.privateOwnerSessionId === payload.ownerSessionId &&
+          typeof invitedRoom.name === 'string' &&
+          typeof invitedRoom.description === 'string';
+        if (
+          !payload ||
+          (!addressedToSession && !addressedToUser) ||
+          typeof payload.roomId !== 'string' ||
+          typeof payload.roomName !== 'string'
+        ) return;
+        setIncomingRoomInvite({
+          senderName: typeof payload.senderName === 'string' ? payload.senderName : 'Um usuário',
+          roomId: payload.roomId,
+          roomName: payload.roomName,
+          ...(isValidPrivateRoom ? { roomData: invitedRoom as RoomData } : {}),
+          ...(typeof payload.ownerSessionId === 'string'
+            ? { ownerSessionId: payload.ownerSessionId }
+            : {}),
+        });
+      })
+      .subscribe((status) => {
+        if (onlineChannelRef.current !== channel) return;
+        onlineChannelReadyRef.current = status === 'SUBSCRIBED';
+        if (status === 'SUBSCRIBED') trackOnlinePresence();
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[Online presence] Channel subscription failed:', { status });
+        }
+      });
+
+    return () => {
+      onlineChannelReadyRef.current = false;
+      setOnlinePresenceReady(false);
+      supabase.removeChannel(channel);
+      onlineChannelRef.current = null;
+      setOnlineUsers([]);
+    };
+  }, [appSessionId, user?.id]);
+
+  useEffect(() => {
+    trackOnlinePresence();
+  }, [currentScreen, selectedLobbyRoom?.id, selectedLobbyRoom?.name, user?.displayName, user?.username, user?.avatarUrl, user?.id]);
+
+  useEffect(() => {
+    const privateRoom = selectedLobbyRoom;
+    if (
+      !onlinePresenceReady ||
+      currentScreen !== 'room' ||
+      !privateRoom?.isPrivate ||
+      !privateRoom.privateOwnerSessionId ||
+      privateRoom.privateOwnerSessionId === appSessionId ||
+      onlineUsers.some(
+        (onlineUser) =>
+          onlineUser.sessionId === privateRoom.privateOwnerSessionId &&
+          onlineUser.roomId === privateRoom.id
+      )
+    ) return;
+    setCurrentScreen('lobby');
+    setSelectedLobbyRoom(null);
+    showToast('A sala privada foi encerrada porque o dono saiu.');
+  }, [onlinePresenceReady, onlineUsers, currentScreen, selectedLobbyRoom?.id, appSessionId]);
+
+  useEffect(() => {
+    if (!user || user.isGuest || user.id.startsWith('local-')) {
+      setFriendConnections([]);
+      setIsLoadingFriends(false);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingFriends(true);
+    fetchFriendConnections(user)
+      .then((connections) => {
+        if (!cancelled) setFriendConnections(connections);
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to load friend connections:', error);
+        if (!cancelled) showToast('Não foi possível carregar sua lista de amigos.');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingFriends(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user || user.isGuest || user.id.startsWith('local-')) {
+      setWishlistItemIds([]);
+      return;
+    }
+    let cancelled = false;
+    fetchWishlistStoreItemIds(user)
+      .then((ids) => {
+        if (!cancelled) setWishlistItemIds(ids);
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to load wishlist:', error);
+        if (!cancelled) showToast('Não foi possível carregar sua wishlist.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user || user.isGuest || user.id.startsWith('local-')) return;
+    const channel = supabase
+    .channel(`inventory-updates:${user.id}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'user_inventory',
+        filter: `user_id=eq.${user.id}`,
+      },
+      (payload) => {
+        setInventoryRevision((revision) => revision + 1);
+        if (payload.new?.gift_from_user_id) {
+          showToast('Você recebeu um presente! Confira seu inventário.');
+        }
+      }
+    )
+    .subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[Inventory realtime] Subscription failed:', { status });
+      }
+    });
+    return () => {
+    void supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!storeSocialModal || storeSocialModal.type === 'friend-gift' || !user || user.isGuest) {
+      setSocialWishlistItemIds([]);
+      setIsSocialWishlistLoading(false);
+      return;
+    }
+    if (storeSocialModal.type === 'wishlist') {
+      setSocialWishlistItemIds(wishlistItemIds);
+      setIsSocialWishlistLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIsSocialWishlistLoading(true);
+    fetchWishlistStoreItemIds(user, storeSocialModal.userId)
+      .then((ids) => {
+        if (!cancelled) setSocialWishlistItemIds(ids);
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to load public wishlist:', error);
+        if (!cancelled) {
+          setSocialWishlistItemIds([]);
+          showToast('Não foi possível carregar a wishlist deste usuário.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsSocialWishlistLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [storeSocialModal, user?.id, wishlistItemIds]);
 
   const [roomMovementSettings, setRoomMovementSettings] =
     useState<RoomMovementSettings>(DEFAULT_ROOM_MOVEMENT_SETTINGS);
@@ -329,6 +638,23 @@ export const App: React.FC = () => {
     setCustomizationItems([]);
     setStoreAvatars([]);
     setAvatarPoses([]);
+    try {
+      const savedAttachments = JSON.parse(
+        localStorage.getItem(poseActionAttachmentStorageKey(user?.id || 'guest')) || '{}'
+      );
+      setPoseActionAttachments(
+        savedAttachments && typeof savedAttachments === 'object' ? savedAttachments : {}
+      );
+      const savedExclusions = JSON.parse(
+        localStorage.getItem(poseActionExclusionStorageKey(user?.id || 'guest')) || '{}'
+      );
+      setPoseActionExclusions(
+        savedExclusions && typeof savedExclusions === 'object' ? savedExclusions : {}
+      );
+    } catch (error) {
+      console.warn('Não foi possível carregar as actions anexadas às poses:', error);
+      setPoseActionAttachments({});
+    }
     setInventory([]);
     setWalletCoins(null);
     setActiveAvatarId('');
@@ -385,8 +711,10 @@ export const App: React.FC = () => {
 
   // Modals
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isAudioUploadModalOpen, setIsAudioUploadModalOpen] = useState(false);
   const [isBoundaryModalOpen, setIsBoundaryModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
   const [isPublishItemModalOpen, setIsPublishItemModalOpen] = useState(false);
   const [isMyPublicationsModalOpen, setIsMyPublicationsModalOpen] = useState(false);
@@ -824,13 +1152,47 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    const applySession = (authUser: { id: string; email?: string }) => {
+    const applySession = (authUser: {
+      id: string;
+      email?: string;
+      user_metadata?: Record<string, unknown>;
+    }) => {
+      const metadata = authUser.user_metadata || {};
       setUser({
         id: authUser.id,
         email: authUser.email || '',
-        displayName: authUser.email?.split('@')[0] || 'Criador',
+        displayName:
+          typeof metadata.display_name === 'string'
+            ? metadata.display_name
+            : authUser.email?.split('@')[0] || 'Criador',
+        username: typeof metadata.username === 'string' ? metadata.username : undefined,
+        avatarUrl: typeof metadata.avatar_url === 'string' ? metadata.avatar_url : undefined,
         isGuest: false,
       });
+      window.setTimeout(() => {
+        void supabase
+          .from('profiles')
+          .select('display_name, username, avatar_url')
+          .eq('id', authUser.id)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) {
+              console.error('Falha ao carregar perfil Supabase:', error);
+              return;
+            }
+            if (!data) return;
+            setUser((currentUser) =>
+              currentUser?.id === authUser.id
+                ? {
+                    ...currentUser,
+                    displayName: data.display_name || currentUser.displayName,
+                    username: data.username || undefined,
+                    avatarUrl: data.avatar_url || undefined,
+                  }
+                : currentUser
+            );
+          });
+      }, 0);
     };
 
     supabase.auth.getSession().then(({ data, error }) => {
@@ -906,6 +1268,7 @@ export const App: React.FC = () => {
 
       let inventoryRows: any[] = [];
       let remoteAssets: Awaited<ReturnType<typeof fetchRemoteInventory>> = [];
+      let userAudioAssets: Awaited<ReturnType<typeof fetchUserAudioAssets>> = [];
       const ownedStoreItemIds = new Set<string>();
       let currentAccountId: string | undefined;
       let inventoryLoadError: string | null = null;
@@ -918,10 +1281,11 @@ export const App: React.FC = () => {
           inventoryLoadError = 'Sua sessão expirou. Entre novamente para acessar seu inventário.';
           walletLoadError = inventoryLoadError;
         } else {
-          const [dbInventoryResult, remoteInventoryResult, walletResult] = await Promise.allSettled([
+          const [dbInventoryResult, remoteInventoryResult, walletResult, audioAssetsResult] = await Promise.allSettled([
             fetchUserInventoryFromDatabase(user),
             fetchRemoteInventory(user.id, sessionData.session.access_token),
             fetchUserWalletFromDatabase(user),
+            fetchUserAudioAssets(user),
           ]);
           if (dbInventoryResult.status === 'fulfilled') {
             inventoryRows = dbInventoryResult.value;
@@ -944,6 +1308,12 @@ export const App: React.FC = () => {
             console.error('Falha ao carregar saldo Supabase:', walletResult.reason);
             walletLoadError = 'Não foi possível consultar o saldo da sua conta.';
           }
+          if (audioAssetsResult.status === 'fulfilled') {
+            userAudioAssets = audioAssetsResult.value;
+          } else {
+            console.error('Falha ao carregar áudios do inventário Supabase:', audioAssetsResult.reason);
+            inventoryLoadError = inventoryLoadError || 'Não foi possível carregar os áudios da sua conta.';
+          }
         }
       }
       if (cancelled) return;
@@ -963,8 +1333,34 @@ export const App: React.FC = () => {
         owned: ownedForAccount(avatar.id, avatar.assetId, avatar.ownerUserId),
         applied: false,
       }));
+      let savedPoseActionAttachments: Record<string, ObjectAction[]> = {};
+      let savedPoseActionExclusions: Record<string, string[]> = {};
+      try {
+        const parsedAttachments = JSON.parse(
+          localStorage.getItem(poseActionAttachmentStorageKey(accountId || 'guest')) || '{}'
+        );
+        if (parsedAttachments && typeof parsedAttachments === 'object') {
+          savedPoseActionAttachments = parsedAttachments;
+        }
+        const parsedExclusions = JSON.parse(
+          localStorage.getItem(poseActionExclusionStorageKey(accountId || 'guest')) || '{}'
+        );
+        if (parsedExclusions && typeof parsedExclusions === 'object') {
+          savedPoseActionExclusions = parsedExclusions;
+        }
+      } catch (error) {
+        console.warn('Não foi possível aplicar as actions locais das poses:', error);
+      }
       const poses = storeResult.poses.map((pose) => ({
         ...pose,
+        actions: [
+          ...(pose.actions || []).filter(
+            (action) => !savedPoseActionExclusions[pose.id]?.includes(action.sourceStoreItemId || '')
+          ),
+          ...(savedPoseActionAttachments[pose.id] || []).filter(
+            (action) => !(pose.actions || []).some((storedAction) => storedAction.id === action.id)
+          ),
+        ],
         owned:
           ownedForAccount(pose.id, pose.assetId, pose.ownerUserId) ||
           avatars.some((avatar) => {
@@ -1017,7 +1413,20 @@ export const App: React.FC = () => {
           createdAt: item.createdAt,
           assetId: item.assetId,
           name: item.name,
-          kind: item.isAccessory ? 'accessory' as const : 'item' as const,
+          kind: item.isActionAsset
+            ? 'action' as const
+            : item.isAudio
+            ? 'audio' as const
+            : item.storeObjectType === 'sala'
+              ? 'room' as const
+              : item.storeObjectType === 'moveis'
+                ? 'furniture' as const
+                : item.isAccessory
+                  ? 'accessory' as const
+                  : item.category === 'publicados'
+                    ? 'other' as const
+                    : 'item' as const,
+          audioUrl: item.audioUrl,
           price: item.price ?? 0,
           thumbUrl: item.thumb,
           owned: ownedForAccount(item.id, item.assetId, item.ownerUserId),
@@ -1035,7 +1444,11 @@ export const App: React.FC = () => {
             avatarsWithPoses.some((avatar) => avatar.owned && avatar.poseIds?.includes(pose.id)),
         })),
       ]
-        .filter((product) => Boolean(product.assetId) && Number.isFinite(product.price) && product.price >= 0)
+        .filter((product) =>
+          (Boolean(product.assetId) || ('audioUrl' in product && Boolean(product.audioUrl))) &&
+          Number.isFinite(product.price) &&
+          product.price >= 0
+        )
         .sort((left, right) => {
           const leftDate = Date.parse(left.createdAt || '');
           const rightDate = Date.parse(right.createdAt || '');
@@ -1059,6 +1472,8 @@ export const App: React.FC = () => {
             ? 'Avatar'
             : poseProduct
               ? 'Pose'
+              : customItem?.isAudio
+                ? 'Audio'
               : customItem?.storeObjectType === 'sala'
                 ? 'Sala'
                 : customItem?.storeObjectType === 'moveis'
@@ -1071,16 +1486,28 @@ export const App: React.FC = () => {
             storeItemId: row.store_item_id,
             assetId: product.assetId,
             ownerUserId: currentAccountId,
+            isPurchased: !(
+              ('tags' in product && product.isUserPublished) ||
+              ('thumbnailUrl' in product && product.isPublishedByCreator) ||
+              ('category' in product && product.isPublishedByCreator)
+            ),
             fileName: `${product.name}.glb`,
             displayName: product.name,
             name: product.name,
             thumbUrl: avatarProduct?.thumb || poseProduct?.thumbnailUrl || customItem?.thumb || '',
             thumbnailUrl: avatarProduct?.thumb || poseProduct?.thumbnailUrl || customItem?.thumb || '',
             type,
+            isAudio: customItem?.isAudio,
+            isActionAsset: customItem?.isActionAsset,
+            audioUrl: customItem?.audioUrl,
+            audioIsRadio: customItem?.audioIsRadio,
             createdAt: row.acquired_at ? new Date(row.acquired_at).toLocaleDateString() : undefined,
             isAccessory: customItem?.isAccessory,
             isScenario: customItem?.storeObjectType === 'sala',
-            actions: customItem?.actions || avatarProduct?.actions,
+            actions: customItem?.actions?.map((action) => ({
+              ...action,
+              sourceStoreItemId: action.sourceStoreItemId || product.id,
+            })) || avatarProduct?.actions,
             accessoryAttachment: customItem?.accessoryAttachment,
             accessoryTransform: customItem?.accessoryTransform,
             modelType: avatarProduct ? 'avatar' : undefined,
@@ -1131,7 +1558,28 @@ export const App: React.FC = () => {
           modelType: asset.category === 'avatar' ? 'avatar' : 'custom_glb',
           fileBlobUrl: asset.download_url,
         }));
-        setInventory(dedupeInventoryPoses([...acquiredItems, ...bundledPoseItems, ...uploadedAssets]));
+        const savedAudioAssets: InventoryItem[] = userAudioAssets
+          .filter((audio) => !audio.published_store_item_id)
+          .map((audio) => ({
+            id: audio.id,
+            audioAssetId: audio.id,
+            ownerUserId: currentAccountId,
+            fileName: audio.name,
+            displayName: audio.name,
+            name: audio.name,
+            thumbUrl: '',
+            type: 'Audio',
+            isAudio: true,
+            audioUrl: audio.audio_url,
+            audioIsRadio: audio.is_radio,
+            createdAt: new Date(audio.created_at).toLocaleDateString(),
+          }));
+        setInventory(dedupeInventoryPoses([
+          ...acquiredItems,
+          ...bundledPoseItems,
+          ...uploadedAssets,
+          ...savedAudioAssets,
+        ]));
 
         const storedAvatarId = localStorage.getItem(activeAvatarStorageKey(currentAccountId));
         const activeAvatar = avatars.find((avatar) => avatar.id === storedAvatarId && avatar.owned);
@@ -1163,11 +1611,53 @@ export const App: React.FC = () => {
     try {
       const result = await purchaseStoreItemFromDatabase(user, storeItemId);
       setWalletCoins(result.coins);
+      setWishlistItemIds((ids) => ids.filter((id) => id !== storeItemId));
       setInventoryRevision((revision) => revision + 1);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Não foi possível concluir a compra.';
       showToast(message);
+      throw error;
+    }
+  };
+
+  const handleToggleWishlistItem = async (storeItemId: string) => {
+    if (!user || user.isGuest) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    const shouldSave = !wishlistItemIds.includes(storeItemId);
+    try {
+      await setWishlistStoreItem(user, storeItemId, shouldSave);
+      setWishlistItemIds((ids) =>
+        shouldSave ? [...ids, storeItemId] : ids.filter((id) => id !== storeItemId)
+      );
+    } catch (error) {
+      console.error('Could not update wishlist:', error);
+      showToast('Não foi possível atualizar sua wishlist.');
+    }
+  };
+
+  const handlePurchaseGift = async (
+    storeItemId: string,
+    recipientUserId: string,
+    requireWishlist: boolean
+  ) => {
+    if (!user || user.isGuest) {
+      setIsAuthModalOpen(true);
+      throw new Error('Entre com uma conta para presentear.');
+    }
+    try {
+      const balance = await purchaseStoreItemAsGift(user, storeItemId, recipientUserId, requireWishlist);
+      setWalletCoins(balance);
+      if (recipientUserId === user.id) {
+        setInventoryRevision((revision) => revision + 1);
+        setWishlistItemIds((ids) => ids.filter((id) => id !== storeItemId));
+      }
+      setStoreSocialModal(null);
+      showToast('Presente enviado! O item foi adicionado ao inventário do destinatário.');
+    } catch (error) {
+      console.error('Could not purchase store gift:', error);
       throw error;
     }
   };
@@ -1222,6 +1712,45 @@ export const App: React.FC = () => {
         p.id === poseId ? { ...p, applied: false } : p
       )
     );
+  };
+
+  const handleTogglePoseAction = (poseId: string, action: ObjectAction, attached: boolean) => {
+    const actionSourceId = action.sourceStoreItemId || action.id;
+    const updatedAttachments = { ...poseActionAttachments };
+    const current = updatedAttachments[poseId] || [];
+    updatedAttachments[poseId] = attached
+      ? [...current.filter((storedAction) => storedAction.sourceStoreItemId !== actionSourceId), action]
+      : current.filter((storedAction) => storedAction.sourceStoreItemId !== actionSourceId);
+    if (updatedAttachments[poseId].length === 0) delete updatedAttachments[poseId];
+    setPoseActionAttachments(updatedAttachments);
+    const updatedExclusions = { ...poseActionExclusions };
+    const currentExclusions = updatedExclusions[poseId] || [];
+    updatedExclusions[poseId] = attached
+      ? currentExclusions.filter((sourceId) => sourceId !== actionSourceId)
+      : [...new Set([...currentExclusions, actionSourceId])];
+    if (updatedExclusions[poseId].length === 0) delete updatedExclusions[poseId];
+    setPoseActionExclusions(updatedExclusions);
+    safeLocalStorageSet(
+      poseActionAttachmentStorageKey(user?.id || 'guest'),
+      JSON.stringify(updatedAttachments)
+    );
+    safeLocalStorageSet(
+      poseActionExclusionStorageKey(user?.id || 'guest'),
+      JSON.stringify(updatedExclusions)
+    );
+    setAvatarPoses((prev) =>
+      prev.map((pose) => {
+        if (pose.id !== poseId) return pose;
+        const baseActions = (pose.actions || []).filter(
+          (storedAction) => storedAction.sourceStoreItemId !== actionSourceId
+        );
+        return {
+          ...pose,
+          actions: attached ? [...baseActions, action] : baseActions,
+        };
+      })
+    );
+    showToast(attached ? `Action "${action.name}" anexada à pose.` : `Action "${action.name}" removida da pose.`);
   };
 
   const handleSelectActiveAvatar = (avatarId: string) => {
@@ -1310,6 +1839,7 @@ export const App: React.FC = () => {
     bundlePoses?: boolean;
     updateExistingId?: string;
     actions?: ObjectAction[];
+    isActionAsset?: boolean;
     accessoryAttachment?: AccessoryAttachmentPoint;
     accessoryTransform?: AccessoryTransform;
   }) => {
@@ -1322,7 +1852,7 @@ export const App: React.FC = () => {
       return;
     }
 
-    const assetId = payload.item.assetId || payload.item.id;
+    const assetId = payload.item.isAudio ? payload.item.assetId : payload.item.assetId || payload.item.id;
     const associatedAvatarIds = payload.associatedAvatarIds || [];
     const result = await persistStoreItem({
       id: payload.updateExistingId,
@@ -1348,6 +1878,10 @@ export const App: React.FC = () => {
         poseAccess: payload.poseAccess,
         sourceObjectId: payload.item.sourceObjectId,
         isAccessory: payload.objectType === 'acessorio',
+        isAudio: payload.item.isAudio,
+        isActionAsset: payload.isActionAsset === true,
+        audioUrl: payload.item.audioUrl,
+        audioIsRadio: payload.item.audioIsRadio,
         accessoryAttachment: payload.accessoryAttachment,
         accessoryTransform: payload.accessoryTransform,
         actions: payload.actions || [],
@@ -1357,6 +1891,16 @@ export const App: React.FC = () => {
     if (!result.success || !result.id) {
       showToast(`⚠️ ${result.error || 'O banco não confirmou a publicação.'}`);
       return;
+    }
+
+    let audioInventoryLinkFailed = false;
+    if (payload.item.isAudio && payload.item.audioAssetId) {
+      try {
+        await markUserAudioAssetPublished(user, payload.item.audioAssetId, result.id);
+      } catch (error) {
+        console.error('Publicação salva, mas falhou o vínculo do áudio com o item publicado:', error);
+        audioInventoryLinkFailed = true;
+      }
     }
 
     try {
@@ -1375,7 +1919,9 @@ export const App: React.FC = () => {
 
     let bundledPoseFailures = 0;
     if (payload.objectType === 'avatar' && payload.bundlePoses !== false) {
-      const avatarObjectIds = new Set<string>([payload.item.id, assetId]);
+      const avatarObjectIds = new Set<string>(
+        [payload.item.id, assetId].filter((id): id is string => Boolean(id))
+      );
       if (payload.item.sourceObjectId) avatarObjectIds.add(payload.item.sourceObjectId);
       const attachedPoses = activeRoom.placedObjects.filter(
         (object) => (object.type === 'pose' || object.isPose) &&
@@ -1433,7 +1979,9 @@ export const App: React.FC = () => {
     setIsPublishItemModalOpen(false);
     showToast(bundledPoseFailures
       ? `"${payload.name}" publicado. ${bundledPoseFailures} pose(s) anexada(s) não puderam ser registradas.`
-      : `"${payload.name}" publicado e registrado na sua conta.`);
+      : audioInventoryLinkFailed
+        ? `"${payload.name}" publicado, mas o áudio permaneceu na biblioteca original.`
+        : `"${payload.name}" publicado e registrado na sua conta.`);
   };
   const handleRenameInventoryItem = (id: string, newName: string) => {
     const trimmed = newName.trim();
@@ -1830,6 +2378,11 @@ export const App: React.FC = () => {
     autoInsertPoint?: [number, number, number] | null
   ) => {
     setInventory((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
+
+    if (item.isAudio) {
+      showToast(`Áudio "${item.displayName}" salvo no inventário.`);
+      return;
+    }
 
     const isAcc = item.isAccessory || item.type === 'Acessorio' || item.type === 'Item';
     setCustomizationItems((prev) => [
@@ -2411,11 +2964,62 @@ export const App: React.FC = () => {
   const handlePublishRoom = () => {
     setRooms((prev) =>
       prev.map((r) =>
-        r.id === activeRoomId ? { ...r, isPublished: true, publishedAt: 'Agora' } : r
+        r.id === activeRoomId
+          ? { ...r, isPublished: true, isPrivate: false, publishedAt: 'Agora' }
+          : r
       )
     );
     setIsPublishModalOpen(true);
     showToast(`"${activeRoom.name}" publicada com sucesso! Ela agora aparece na Vitrine.`);
+  };
+
+  const handleEditPurchasedRoom = (item: InventoryItem) => {
+    if (!user || user.isGuest) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    const storeItemId = item.storeItemId || item.id;
+    const existingPrivateRoom = rooms.find(
+      (room) =>
+        room.isPrivate &&
+        room.ownerUserId === user.id &&
+        room.purchasedFromStoreItemId === storeItemId
+    );
+    if (existingPrivateRoom) {
+      setActiveRoomId(existingPrivateRoom.id);
+      setCurrentScreen('editor');
+      showToast(`"${existingPrivateRoom.name}" aberta para editar.`);
+      return;
+    }
+
+    const sceneAssetId = item.assetId || item.id;
+    if (!sceneAssetId) {
+      showToast('O modelo desta sala comprada não está disponível.');
+      return;
+    }
+    const newRoom: RoomEditorState = {
+      ...activeRoom,
+      id: crypto.randomUUID(),
+      name: item.displayName || item.name || 'Minha sala privada',
+      ownerUserId: user.id,
+      isPrivate: true,
+      purchasedFromStoreItemId: storeItemId,
+      sceneAssetId,
+      sceneAssetBlobUrl: item.fileBlobUrl,
+      placedObjects: [],
+      spots: activeRoom.spots.map((spot) => ({ ...spot })),
+      boundary: { ...activeRoom.boundary },
+      radioUrl: undefined,
+      playlist: [],
+      audioEnabled: true,
+      audioAutoplay: false,
+      isPublished: false,
+      publishedAt: undefined,
+    };
+    setRooms((previous) => [...previous, newRoom]);
+    setActiveRoomId(newRoom.id);
+    setCurrentScreen('editor');
+    showToast(`"${newRoom.name}" aberta como sua cópia privada para editar.`);
   };
 
   // Attach/detach a pose object to avatars (editor avatar objects or store avatars)
@@ -2512,7 +3116,7 @@ export const App: React.FC = () => {
     }
 
     const publishedEditorRooms: RoomData[] = rooms
-      .filter((r) => r.isPublished)
+      .filter((r) => r.isPublished && !r.isPrivate)
       .map((r) => ({
         id: `editor-${r.id}`,
         name: r.name,
@@ -2555,6 +3159,137 @@ export const App: React.FC = () => {
 
     return combined;
   }, [rooms, publicShowcaseRooms]);
+
+  const privateLobbyRooms: RoomData[] = React.useMemo(() => {
+    if (!user || user.isGuest) return [];
+    const privateRoomsByStoreItem = new Map<string, RoomEditorState>();
+    rooms
+      .filter((room) => room.isPrivate && room.ownerUserId === user.id && room.sceneAssetId)
+      .forEach((room) => {
+        if (room.purchasedFromStoreItemId) {
+          privateRoomsByStoreItem.set(room.purchasedFromStoreItemId, room);
+        }
+      });
+
+    inventory
+      .filter((item) => item.isPurchased && item.type.toLowerCase() === 'sala')
+      .forEach((item) => {
+        const storeItemId = item.storeItemId || item.id;
+        if (privateRoomsByStoreItem.has(storeItemId) || !(item.assetId || item.id)) return;
+        const roomTemplate = INITIAL_ROOMS[0];
+        privateRoomsByStoreItem.set(storeItemId, {
+          ...roomTemplate,
+          id: `private-${user.id}-${storeItemId}`,
+          name: item.displayName || item.name || 'Sala privada',
+          ownerUserId: user.id,
+          isPrivate: true,
+          purchasedFromStoreItemId: storeItemId,
+          sceneAssetId: item.assetId || item.id,
+          sceneAssetBlobUrl: item.fileBlobUrl,
+          placedObjects: [],
+          spots: roomTemplate.spots.map((spot) => ({ ...spot })),
+          boundary: { ...roomTemplate.boundary },
+          isPublished: false,
+        });
+      });
+
+    return Array.from(privateRoomsByStoreItem.values()).map((privateRoom) => ({
+      id: `private-${privateRoom.id}`,
+      name: privateRoom.name,
+      badge: '🔒',
+      occupation: '1/8 · Privada',
+      currentUsers: 1,
+      maxUsers: 8,
+      thumb: inventory.find(
+        (item) => (item.storeItemId || item.id) === privateRoom.purchasedFromStoreItemId
+      )?.thumbUrl || 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80',
+      description: 'Sua sala privada comprada. Somente você e pessoas convidadas podem entrar.',
+      isFromEditor: true,
+      isPrivate: true,
+      privateOwnerUserId: user.id,
+      privateOwnerSessionId: appSessionId,
+      editorRoomId: privateRoom.id,
+      editorRoom: privateRoom,
+      ownerUserId: user.id,
+      ambientColor: '#ffd700',
+    }));
+  }, [rooms, inventory, user, appSessionId]);
+
+  const handleAddFriend = async (friendUserId: string) => {
+    if (!user || user.isGuest) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    await addOrAcceptFriend(user, friendUserId);
+    setFriendConnections(await fetchFriendConnections(user));
+  };
+
+  const handleInviteOnlineUser = (onlineUser: OnlineLobbyUser) => {
+    const currentRoom = currentScreen === 'room' ? selectedLobbyRoom : null;
+    if (!currentRoom || !onlineChannelRef.current || !onlineChannelReadyRef.current) {
+      showToast('Conecte-se à sala para enviar um convite.');
+      return;
+    }
+    if (currentRoom.isPrivate && currentRoom.privateOwnerUserId !== user?.id) {
+      showToast('Somente o dono pode convidar pessoas para esta sala privada.');
+      return;
+    }
+    void onlineChannelRef.current.send({
+      type: 'broadcast',
+      event: 'room-invite',
+      payload: {
+        recipientSessionId: onlineUser.userId ? undefined : onlineUser.sessionId,
+        recipientUserId: onlineUser.userId,
+        roomId: currentRoom.id,
+        roomName: currentRoom.name || 'Sala',
+        senderName: user?.displayName || 'Um usuário',
+        ...(currentRoom.isPrivate
+          ? {
+              roomData: currentRoom,
+              ownerSessionId: currentRoom.privateOwnerSessionId,
+            }
+          : {}),
+      },
+    }).then((status: string) => {
+      if (status !== 'ok') {
+        console.warn('[Online presence] Room invite broadcast failed:', { status });
+        showToast('Não foi possível enviar o convite.');
+        return;
+      }
+      showToast(`Convite enviado para ${onlineUser.displayName}.`);
+    }).catch((error: unknown) => {
+      console.warn('[Online presence] Room invite broadcast rejected:', error);
+      showToast('Falha de conexão ao enviar o convite.');
+    });
+  };
+
+  const handleAcceptRoomInvite = () => {
+    if (!incomingRoomInvite) return;
+    const invitedRoom =
+      incomingRoomInvite.roomData ||
+      lobbyRooms.find((room) => room.id === incomingRoomInvite.roomId);
+    if (!invitedRoom) {
+      showToast('Esta sala não está mais disponível na vitrine.');
+      setIncomingRoomInvite(null);
+      return;
+    }
+    if (
+      invitedRoom.isPrivate &&
+      (!incomingRoomInvite.ownerSessionId ||
+        !onlineUsers.some(
+          (onlineUser) =>
+            onlineUser.sessionId === incomingRoomInvite.ownerSessionId &&
+            onlineUser.roomId === invitedRoom.id
+        ))
+    ) {
+      showToast('O dono não está mais na sala privada.');
+      setIncomingRoomInvite(null);
+      return;
+    }
+    setSelectedLobbyRoom(invitedRoom);
+    setCurrentScreen('room');
+    setIncomingRoomInvite(null);
+  };
 
   // Handle Playtest room without publishing or appearing in vitrine
   const handlePlaytestActiveRoom = () => {
@@ -2612,6 +3347,7 @@ export const App: React.FC = () => {
       {currentScreen === 'lobby' && (
         <LobbyView
           rooms={lobbyRooms}
+          privateRooms={privateLobbyRooms}
           selectedRoomIndex={lobbyRoomIndex}
           onSelectRoomIndex={setLobbyRoomIndex}
           onEnterRoom={(room) => {
@@ -2624,11 +3360,12 @@ export const App: React.FC = () => {
             setCurrentScreen('customization');
           }}
           onOpenFriends={() => {
-            showToast('Lista de amigos conectada.');
+            setIsFriendsModalOpen(true);
           }}
           onOpenEditor={() => setCurrentScreen('editor')}
           user={user}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          onOpenProfile={() => setIsProfileModalOpen(true)}
           onLogout={handleLogout}
           movementSettings={roomMovementSettings}
           onMovementSettingsChange={setRoomMovementSettings}
@@ -2637,6 +3374,17 @@ export const App: React.FC = () => {
           storeError={storeError}
           coins={walletCoins}
           onPurchaseStoreItem={handlePurchaseStoreItem}
+          wishlistItemIds={wishlistItemIds}
+          friends={friendConnections.filter((friend) => friend.status === 'accepted')}
+          onToggleWishlist={handleToggleWishlistItem}
+          onOpenWishlist={() => {
+            if (!user || user.isGuest) {
+              setIsAuthModalOpen(true);
+              return;
+            }
+            setStoreSocialModal({ type: 'wishlist' });
+          }}
+          onGiftProduct={(product) => setStoreSocialModal({ type: 'friend-gift', product })}
         />
       )}
 
@@ -2650,6 +3398,25 @@ export const App: React.FC = () => {
           initialTab={customizationInitialTab}
           hideStoreTab={customizationInitialTab === 'inventario'}
           userInventory={inventory}
+          availableActions={attachableActionInventory}
+          onEditPurchasedRoom={handleEditPurchasedRoom}
+          wishlistItemIds={wishlistItemIds}
+          onToggleWishlistItem={handleToggleWishlistItem}
+          onOpenWishlist={() => {
+            if (!user || user.isGuest) {
+              setIsAuthModalOpen(true);
+              return;
+            }
+            setStoreSocialModal({ type: 'wishlist' });
+          }}
+          onGiftStoreItem={(productId) => {
+            const product = roomStoreCatalog.find((storeProduct) => storeProduct.id === productId);
+            if (!product) {
+              showToast('Este item não está disponível para presentear.');
+              return;
+            }
+            setStoreSocialModal({ type: 'friend-gift', product });
+          }}
           customizationItems={customizationItems}
           storeAvatars={storeAvatars}
           coins={walletCoins}
@@ -2660,6 +3427,7 @@ export const App: React.FC = () => {
           onPurchaseStoreItem={handlePurchaseStoreItem}
           activeAvatarId={activeAvatarId}
           poses={avatarPoses}
+          onTogglePoseAction={handleTogglePoseAction}
           onToggleEquipItem={handleToggleEquipItem}
           onRemoveItemFromInventory={handleRemoveItemFromInventory}
           onApplyPose={handleApplyPose}
@@ -2728,6 +3496,21 @@ export const App: React.FC = () => {
           onSelectActiveAvatar={handleSelectActiveAvatar}
           onToggleEquipItem={handleToggleEquipItem}
           onApplyPose={handleApplyPose}
+          onOpenFriends={() => setIsFriendsModalOpen(true)}
+          friendConnections={friendConnections}
+          wishlistItemIds={wishlistItemIds}
+          onToggleWishlist={handleToggleWishlistItem}
+          onOpenWishlist={() => {
+            if (!user || user.isGuest) {
+              setIsAuthModalOpen(true);
+              return;
+            }
+            setStoreSocialModal({ type: 'wishlist' });
+          }}
+          onGiftProduct={(product) => setStoreSocialModal({ type: 'friend-gift', product })}
+          onViewUserWishlist={(userId, displayName) =>
+            setStoreSocialModal({ type: 'user-wishlist', userId, displayName })
+          }
         />
       )}
 
@@ -2787,6 +3570,7 @@ export const App: React.FC = () => {
             }}
             onRemoveObject={handleRemoveObject}
             onOpenUploadModal={() => setIsUploadModalOpen(true)}
+            onOpenAudioUploadModal={() => setIsAudioUploadModalOpen(true)}
             onInsertAssetToScene={handleInsertAssetToScene}
             onAddSpot={handleAddSpot}
             onRenameSpot={handleRenameSpot}
@@ -3003,6 +3787,85 @@ export const App: React.FC = () => {
     onLogout={handleLogout}
   />
 
+  <UserProfileModal
+    isOpen={isProfileModalOpen}
+    onClose={() => setIsProfileModalOpen(false)}
+    user={user}
+    onProfileUpdated={setUser}
+    onOpenAuth={() => {
+      setIsProfileModalOpen(false);
+      setIsAuthModalOpen(true);
+    }}
+  />
+
+  <FriendsModal
+    isOpen={isFriendsModalOpen}
+    onClose={() => setIsFriendsModalOpen(false)}
+    user={user}
+    onlineUsers={onlineUsers}
+    friends={friendConnections}
+    isLoadingFriends={isLoadingFriends}
+    currentRoomName={
+      currentScreen === 'room' && selectedLobbyRoom && !selectedLobbyRoom.isPlaytest
+        ? selectedLobbyRoom.name
+        : undefined
+    }
+    onAddFriend={handleAddFriend}
+    onInviteToRoom={handleInviteOnlineUser}
+  />
+
+  {storeSocialModal && (
+    <StoreSocialModal
+      state={storeSocialModal}
+      products={roomStoreCatalog}
+      wishlistItemIds={storeSocialModal.type === 'wishlist' ? wishlistItemIds : socialWishlistItemIds}
+      friends={friendConnections.filter((friend) => friend.status === 'accepted')}
+      loadingWishlist={isSocialWishlistLoading}
+      onClose={() => setStoreSocialModal(null)}
+      onPurchase={(productId) => handlePurchaseStoreItem(productId).then(() => undefined)}
+      onGift={handlePurchaseGift}
+      onRemoveWishlistItem={async (productId) => {
+        if (!user || user.isGuest) return;
+        await setWishlistStoreItem(user, productId, false);
+        setWishlistItemIds((ids) => ids.filter((id) => id !== productId));
+      }}
+    />
+  )}
+
+  {incomingRoomInvite && (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="room-invite-title"
+        className="w-full max-w-sm rounded-2xl border border-amber-400/50 bg-[#141519] p-5 text-zinc-100 shadow-2xl"
+      >
+        <h2 id="room-invite-title" className="text-sm font-bold text-white">
+          Convite para a sala
+        </h2>
+        <p className="mt-2 text-xs text-zinc-300">
+          {incomingRoomInvite.senderName} convidou você para <strong>{incomingRoomInvite.roomName}</strong>.
+        </p>
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setIncomingRoomInvite(null)}
+            className="flex-1 rounded-lg border border-white/15 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5"
+          >
+            Agora não
+          </button>
+          <button
+            type="button"
+            onClick={handleAcceptRoomInvite}
+            className="flex-1 rounded-lg bg-amber-400 px-3 py-2 text-xs font-bold text-black hover:bg-amber-300"
+          >
+            Entrar na sala
+          </button>
+        </div>
+      </section>
+    </div>
+  )}
+
   <UploadGLBModal
     isOpen={isUploadModalOpen}
     onClose={() => setIsUploadModalOpen(false)}
@@ -3010,6 +3873,14 @@ export const App: React.FC = () => {
     user={user}
     userDisplayName={user?.displayName || 'Luzenne'}
     onPublishToStore={handlePublishInventoryItemToStore}
+  />
+
+  <AudioUploadModal
+    isOpen={isAudioUploadModalOpen}
+    onClose={() => setIsAudioUploadModalOpen(false)}
+    user={user}
+    onUploadSuccess={handleUploadSuccess}
+    onPublish={handlePublishInventoryItemToStore}
   />
 
   <BoundaryModal
@@ -3034,6 +3905,7 @@ export const App: React.FC = () => {
     onClose={() => setIsPublishItemModalOpen(false)}
     item={publishingItem}
     user={user}
+    availableActions={attachableActionInventory}
     availableAvatars={storeAvatars}
     attachInfo={(() => {
       if (!publishingItem) return undefined;

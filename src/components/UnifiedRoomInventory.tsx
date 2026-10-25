@@ -16,7 +16,14 @@ import {
   SlidersHorizontal,
   Flame,
 } from 'lucide-react';
-import { RoomAccessSlot, StoreAvatar, AvatarPose, AvatarPoseConfig, ObjectAction } from '../types';
+import {
+  RoomAccessSlot,
+  StoreAvatar,
+  AvatarPose,
+  AvatarPoseConfig,
+  ObjectAction,
+  InventoryItem,
+} from '../types';
 
 interface UnifiedRoomInventoryProps {
   avatarActions?: ObjectAction[];
@@ -37,7 +44,9 @@ interface UnifiedRoomInventoryProps {
   // Mobile dock mode: opened/closed by the parent dock, always horizontal
   embedded?: boolean;
   onClose?: () => void;
-  initialTab?: 'atalhos' | 'poses' | 'avatars' | 'actions';
+  initialTab?: 'atalhos' | 'poses' | 'avatars' | 'actions' | 'audio';
+  audioItems?: InventoryItem[];
+  onApplyAudio?: (item: InventoryItem) => void;
 }
 
 export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
@@ -59,6 +68,8 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
   embedded = false,
   onClose,
   initialTab,
+  audioItems = [],
+  onApplyAudio,
 }) => {
   // Orientation: horizontal (bottom bar) or vertical (side dock)
   const [orientationState, setOrientation] = useState<'horizontal' | 'vertical'>(() => {
@@ -80,7 +91,7 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
   };
 
   // Active Tab inside unified inventory: 'atalhos' | 'poses' | 'avatars'
-  const [activeTab, setActiveTab] = useState<'atalhos' | 'poses' | 'avatars' | 'actions'>(
+  const [activeTab, setActiveTab] = useState<'atalhos' | 'poses' | 'avatars' | 'actions' | 'audio'>(
     initialTab || 'atalhos'
   );
   const [poseSwitchRequest, setPoseSwitchRequest] = useState<{
@@ -363,6 +374,17 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => setActiveTab('audio')}
+              className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
+                activeTab === 'audio'
+                  ? 'bg-[#ffd700] text-black shadow-sm font-bold'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Áudios ({audioItems.length})
+            </button>
+            <button
+              type="button"
               onClick={() => setActiveTab('avatars')}
               className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
                 activeTab === 'avatars'
@@ -616,6 +638,40 @@ export const UnifiedRoomInventory: React.FC<UnifiedRoomInventoryProps> = ({
             );
           })}
           </div>
+        </div>
+      )}
+
+      {activeTab === 'audio' && (
+        <div
+          className={`${
+            orientation === 'horizontal'
+              ? 'flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 scrollbar-thin scrollbar-thumb-zinc-700'
+              : 'grid grid-cols-2 gap-2 overflow-y-auto max-h-[60vh] pr-1 scrollbar-thin scrollbar-thumb-zinc-700'
+          }`}
+        >
+          {audioItems.length === 0 ? (
+            <div className="w-full py-6 text-center text-xs text-zinc-400">
+              Nenhum áudio no inventário. Adquira ou envie um áudio pela vitrine.
+            </div>
+          ) : (
+            audioItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onApplyAudio?.(item)}
+                className={`flex flex-shrink-0 items-center gap-2 rounded-xl border border-cyan-400/25 bg-[#101820] p-2 text-left transition-colors hover:border-cyan-300/70 hover:bg-cyan-950/40 ${
+                  orientation === 'horizontal' ? 'min-w-48 max-w-64' : 'w-full'
+                }`}
+                title={`Aplicar ${item.displayName || item.name} temporariamente na sala`}
+              >
+                <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-cyan-400/15 text-cyan-200">♫</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[11px] font-bold text-white">{item.displayName || item.name}</span>
+                  <span className="mt-0.5 block text-[9px] text-cyan-200">ÁUDIO · temporário</span>
+                </span>
+              </button>
+            ))
+          )}
         </div>
       )}
 

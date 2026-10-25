@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { ArrowLeft, ArrowRight, Coins, LoaderCircle, RefreshCw, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Coins, Filter, Gift, Heart, LoaderCircle, Music2, RefreshCw, ShoppingBag } from 'lucide-react';
 import { resolveAssetDownloadUrl } from '../lib/assetSyncClient';
+import type { FriendConnection } from '../lib/friends';
 
 export interface RoomStoreProduct {
   id: string;
   createdAt?: string;
   assetId?: string;
   name: string;
-  kind: 'avatar' | 'pose' | 'accessory' | 'item';
+  kind: 'avatar' | 'pose' | 'accessory' | 'item' | 'room' | 'furniture' | 'audio' | 'action' | 'other';
+  audioUrl?: string;
   price: number;
   thumbUrl?: string;
   owned: boolean;
@@ -24,6 +26,11 @@ interface RoomStoreShowroom3DProps {
   assetAccessKey?: string | null;
   purchasingProductId: string | null;
   onPurchase: (productId: string) => Promise<void>;
+  wishlistItemIds: string[];
+  friends: FriendConnection[];
+  onToggleWishlist: (productId: string) => Promise<void>;
+  onOpenWishlist: () => void;
+  onGiftProduct: (product: RoomStoreProduct) => void;
   onBackToRoom: () => void;
   onOpenInventory: () => void;
   backLabel?: string;
@@ -50,6 +57,11 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   assetAccessKey,
   purchasingProductId,
   onPurchase,
+  wishlistItemIds,
+  friends,
+  onToggleWishlist,
+  onOpenWishlist,
+  onGiftProduct,
   onBackToRoom,
   onOpenInventory,
   backLabel = 'Voltar à sala',
@@ -65,12 +77,18 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   const [failedIds, setFailedIds] = useState<Set<string>>(() => new Set());
   const [retryCount, setRetryCount] = useState(0);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<'all' | RoomStoreProduct['kind']>('all');
   const pageSize = isMobile ? 1 : DESKTOP_PAGE_SIZE;
-  const visibleProducts = useMemo(
-    () => products.slice(page * pageSize, page * pageSize + pageSize),
-    [page, pageSize, products]
+  const filteredProducts = useMemo(
+    () => activeFilter === 'all' ? products : products.filter((product) => product.kind === activeFilter),
+    [activeFilter, products]
   );
-  const pageCount = Math.ceil(products.length / pageSize);
+  const visibleProducts = useMemo(
+    () => filteredProducts.slice(page * pageSize, page * pageSize + pageSize),
+    [filteredProducts, page, pageSize]
+  );
+  const pageCount = Math.ceil(filteredProducts.length / pageSize);
 
   useEffect(() => {
     const media = window.matchMedia(MOBILE_VIEWPORT_QUERY);
@@ -237,6 +255,10 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
           }
           const product = visibleProducts[index];
           if (!product) return;
+          if (product.kind === 'audio' || (product.kind === 'action' && !product.assetId && product.audioUrl)) {
+            loaded.add(product.id);
+            return;
+          }
           if (!product.assetId) {
             failed.add(product.id);
             return;
@@ -316,21 +338,90 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
   };
 
   const productTypeLabel = (kind: RoomStoreProduct['kind']) =>
-    ({ avatar: 'AVATAR', pose: 'POSE', accessory: 'ACESSÓRIO', item: 'ITEM' })[kind];
+    ({
+      avatar: 'AVATAR',
+      pose: 'POSE',
+      accessory: 'ACESSÓRIO',
+      item: 'ITEM',
+      room: 'SALA',
+      furniture: 'MOBÍLIA',
+      audio: 'ÁUDIO',
+      action: 'ACTION',
+      other: 'OUTROS',
+    })[kind];
+  const filters: { id: typeof activeFilter; label: string }[] = [
+    { id: 'all', label: 'Todos' },
+    { id: 'room', label: 'Salas' },
+    { id: 'furniture', label: 'Mobília' },
+    { id: 'avatar', label: 'Avatares' },
+    { id: 'pose', label: 'Poses' },
+    { id: 'audio', label: 'Áudios' },
+    { id: 'action', label: 'Actions' },
+    { id: 'accessory', label: 'Acessórios' },
+    { id: 'other', label: 'Outros' },
+  ];
 
   return (
     <div className="absolute inset-0 z-[60] overflow-hidden bg-[#0c0d12] text-white">
       <div ref={canvasRef} className="absolute inset-0" aria-label={isMobile ? 'Vitrine 3D com um pedestal de cada vez' : 'Vitrine 3D com três pedestais de itens publicados'} />
 
       <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/75 to-transparent px-4 py-4 sm:px-8">
-        <button
-          type="button"
-          onClick={onBackToRoom}
-          className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/55 px-4 py-2 text-sm font-semibold text-white backdrop-blur hover:border-[#f3c866]/60"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {backLabel}
-        </button>
+        <div className="relative flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onBackToRoom}
+            className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/55 px-4 py-2 text-sm font-semibold text-white backdrop-blur hover:border-[#f3c866]/60"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            {backLabel}
+          </button>
+          <button
+            type="button"
+            aria-expanded={filterOpen}
+            onClick={() => setFilterOpen((open) => !open)}
+            className="flex items-center gap-2 rounded-xl border border-[#f3c866]/40 bg-black/65 px-3 py-2 text-xs font-bold text-[#ffe2a0] backdrop-blur hover:bg-[#f3c866]/15"
+          >
+            <Filter className="h-4 w-4" />
+            Filtrar
+          </button>
+          <button
+            type="button"
+            onClick={onOpenWishlist}
+            aria-label="Abrir minha wishlist"
+            title="Minha wishlist"
+            className="relative flex items-center gap-1.5 rounded-xl border border-pink-400/30 bg-black/65 px-3 py-2 text-xs font-bold text-pink-200 backdrop-blur hover:bg-pink-400/15"
+          >
+            <Heart className="h-4 w-4" />
+            <span className="hidden sm:inline">Wishlist</span>
+            {wishlistItemIds.length > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-pink-500 px-1 text-[9px] font-black text-white">
+                {wishlistItemIds.length}
+              </span>
+            )}
+          </button>
+          {filterOpen && (
+            <div className="absolute left-0 top-full z-30 mt-2 grid w-48 gap-1 rounded-xl border border-[#f3c866]/35 bg-[#101116]/95 p-2 shadow-2xl backdrop-blur">
+              {filters.map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveFilter(filter.id);
+                    setPage(0);
+                    setFilterOpen(false);
+                  }}
+                  className={`rounded-lg px-3 py-2 text-left text-xs font-semibold transition-colors ${
+                    activeFilter === filter.id
+                      ? 'bg-[#d9b55e] text-black'
+                      : 'text-zinc-200 hover:bg-white/10'
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-2 sm:gap-3">
           {coins !== null && (
             <span className="flex items-center gap-1.5 rounded-full border border-amber-300/30 bg-black/55 px-3 py-2 text-xs font-bold text-amber-200 sm:text-sm">
@@ -367,16 +458,18 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
           {error}
         </div>
       )}
-      {!isLoading && !error && products.length === 0 && (
+      {!isLoading && !error && filteredProducts.length === 0 && (
         <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/10 bg-black/60 px-5 py-3 text-sm text-zinc-300">
-          Nenhum item publicado com modelo 3D disponível.
+          Nenhum item publicado nesta categoria.
         </div>
       )}
 
       <div className={`absolute inset-x-0 z-10 flex items-end justify-center gap-2 px-2 sm:gap-6 sm:px-8 ${isMobile ? 'bottom-[12%]' : 'bottom-[7%]'}`}>
         {visibleProducts.map((product) => {
           const isPurchasing = purchasingProductId === product.id;
-          const modelLoading = !loadedIds.has(product.id);
+          const isAudioProduct =
+            product.kind === 'audio' || (product.kind === 'action' && !product.assetId && Boolean(product.audioUrl));
+          const modelLoading = !isAudioProduct && !loadedIds.has(product.id);
           const modelFailed = failedIds.has(product.id);
           const cannotAfford = coins !== null && product.price > coins;
           return (
@@ -397,6 +490,41 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
                   className="mt-2 h-10 w-10 rounded-lg object-cover"
                   loading="lazy"
                 />
+              )}
+              {!product.owned && (
+                <div className="mt-2 flex w-full gap-2">
+                  <button
+                    type="button"
+                    disabled={!isAuthenticated}
+                    onClick={() => void onToggleWishlist(product.id)}
+                    aria-pressed={wishlistItemIds.includes(product.id)}
+                    title={wishlistItemIds.includes(product.id) ? 'Remover da wishlist' : 'Salvar na wishlist'}
+                    className={`flex flex-1 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold disabled:opacity-40 ${
+                      wishlistItemIds.includes(product.id)
+                        ? 'border-pink-400/50 bg-pink-500/15 text-pink-200'
+                        : 'border-white/10 text-zinc-300 hover:border-pink-400/40 hover:text-pink-200'
+                    }`}
+                  >
+                    <Heart className={`h-3.5 w-3.5 ${wishlistItemIds.includes(product.id) ? 'fill-current' : ''}`} />
+                    {wishlistItemIds.includes(product.id) ? 'Salvo' : 'Wishlist'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!isAuthenticated || friends.length === 0}
+                    onClick={() => onGiftProduct(product)}
+                    title={friends.length === 0 ? 'Adicione amigos para enviar presentes' : 'Presentear um amigo'}
+                    className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-amber-300/25 px-2 py-1.5 text-[10px] font-semibold text-amber-200 hover:bg-amber-400/10 disabled:opacity-40"
+                  >
+                    <Gift className="h-3.5 w-3.5" />
+                    Presentear
+                  </button>
+                </div>
+              )}
+              {isAudioProduct && (
+                <span className="mt-2 flex items-center gap-1 text-[10px] text-amber-200">
+                  <Music2 className="h-3.5 w-3.5" />
+                  {product.kind === 'action' ? 'Action de áudio para anexar a poses' : 'Link de rádio ou faixa de áudio'}
+                </span>
               )}
               {modelLoading && !modelFailed && !isLoading && (
                 <span className="mt-1 flex items-center gap-1 text-[9px] text-zinc-300 sm:text-[10px]">
@@ -469,7 +597,7 @@ export const RoomStoreShowroom3D: React.FC<RoomStoreShowroom3DProps> = ({
             <ArrowLeft className="h-4 w-4" />
           </button>
           <span className="rounded-full bg-black/60 px-3 py-1 text-[10px] font-semibold text-zinc-300 backdrop-blur">
-            {page + 1} / { (isMobile ? products.length : pageCount)}
+            {page + 1} /             { (isMobile ? filteredProducts.length : pageCount)}
           </span>
           <button
             type="button"

@@ -22,6 +22,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [showSwitchForm, setShowSwitchForm] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -46,16 +48,44 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           onAuthSuccess({
             id: data.user.id,
             email: data.user.email || email,
-            displayName: data.user.email?.split('@')[0] || 'Criador',
+            displayName:
+              data.user.user_metadata?.display_name ||
+              data.user.email?.split('@')[0] ||
+              'Criador',
+            username: data.user.user_metadata?.username,
+            avatarUrl: data.user.user_metadata?.avatar_url,
             isGuest: false,
           });
           setShowSwitchForm(false);
           onClose();
         }
       } else {
+        const trimmedName = displayName.trim();
+        const normalizedUsername = username.trim().replace(/^@/, '').toLowerCase();
+        if (trimmedName.length < 2 || trimmedName.length > 40) {
+          throw new Error('O nome deve ter entre 2 e 40 caracteres.');
+        }
+        if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
+          throw new Error('O @username deve ter de 3 a 20 caracteres: letras, números ou _.');
+        }
+
+        const { data: existingUsername, error: usernameLookupError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('username', normalizedUsername)
+          .maybeSingle();
+        if (usernameLookupError) throw usernameLookupError;
+        if (existingUsername) throw new Error('Esse @username já está sendo usado. Escolha outro.');
+
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              display_name: trimmedName,
+              username: normalizedUsername,
+            },
+          },
         });
 
         if (error) throw error;
@@ -63,7 +93,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           onAuthSuccess({
             id: data.user.id,
             email: data.user.email || email,
-            displayName: data.user.email?.split('@')[0] || 'Criador',
+            displayName: trimmedName,
+            username: normalizedUsername,
             isGuest: false,
           });
           setShowSwitchForm(false);
@@ -73,7 +104,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } catch (err: any) {
       console.error('Supabase auth error:', err);
       const raw = (err?.message || '').toLowerCase();
-      if (raw.includes('invalid api key') || raw.includes('apikey')) {
+      if (raw.includes('idx_profiles_username_lower') || raw.includes('duplicate key')) {
+        setErrorMsg('Esse @username já está sendo usado. Escolha outro.');
+      } else if (
+        (raw.includes('username') && raw.includes('does not exist')) ||
+        raw.includes('schema cache')
+      ) {
+        setErrorMsg('O cadastro de perfis ainda não está configurado. Execute a migração de perfis no Supabase.');
+      } else if (raw.includes('invalid api key') || raw.includes('apikey')) {
         setErrorMsg(
           'Chave de API do Supabase inválida ("Invalid API key"). Verifique se a variável VITE_SUPABASE_ANON_KEY no painel da Vercel foi copiada corretamente (use a chave "anon public", sem aspas). Para testar agora, utilize o botão "Continuar como Visitante" abaixo.'
         );
@@ -156,7 +194,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div className="flex items-center gap-4 p-4 rounded-xl bg-black/50 border border-[#d4af37]/40 shadow-inner">
               <div className="relative">
                 <div className="w-14 h-14 rounded-full bg-[#181920] border-2 border-[#ffd700] overflow-hidden flex items-center justify-center shadow-[0_0_15px_rgba(255,215,0,0.3)]">
-                  <User className="w-7 h-7 text-[#ffd700]" />
+                  {currentUser.avatarUrl ? (
+                    <img src={currentUser.avatarUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <User className="w-7 h-7 text-[#ffd700]" />
+                  )}
                 </div>
                 <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-black" />
               </div>
@@ -171,6 +213,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <p className="text-xs text-zinc-400 truncate font-mono mt-0.5">
                   {currentUser.email}
                 </p>
+                {currentUser.username && (
+                  <p className="text-[10px] text-zinc-500 truncate mt-0.5">@{currentUser.username}</p>
+                )}
                 <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/70 border border-emerald-500/40 text-[10px] text-emerald-300 font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   <span>Conectado via Supabase</span>
@@ -246,6 +291,46 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   />
                 </div>
               </div>
+
+              {mode === 'signup' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-[#d4af37] mb-1">Nome exibido</label>
+                    <div className="relative flex items-center">
+                      <User className="absolute left-3 w-4 h-4 text-[#d4af37]/50" />
+                      <input
+                        type="text"
+                        required
+                        minLength={2}
+                        maxLength={40}
+                        value={displayName}
+                        onChange={(event) => setDisplayName(event.target.value)}
+                        placeholder="Seu nome"
+                        className="w-full bg-[#16181e] border border-[#d4af37]/40 rounded-lg pl-9 pr-3 py-2 text-xs text-[#e8d5b5] placeholder:text-[#e8d5b5]/30 outline-none focus:border-[#d4af37]"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-[#d4af37] mb-1">@username</label>
+                    <div className="relative flex items-center">
+                      <span className="absolute left-3 text-sm text-[#d4af37]/50">@</span>
+                      <input
+                        type="text"
+                        required
+                        minLength={3}
+                        maxLength={20}
+                        pattern="[a-zA-Z0-9_]{3,20}"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value.replace(/^@/, ''))}
+                        placeholder="seu_usuario"
+                        className="w-full bg-[#16181e] border border-[#d4af37]/40 rounded-lg pl-9 pr-3 py-2 text-xs text-[#e8d5b5] placeholder:text-[#e8d5b5]/30 outline-none focus:border-[#d4af37]"
+                      />
+                    </div>
+                    <p className="mt-1 text-[10px] text-zinc-500">De 3 a 20 caracteres: letras, números ou _.</p>
+                  </div>
+                </>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-[#d4af37] mb-1">

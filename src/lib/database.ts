@@ -28,13 +28,16 @@ export async function persistStoreItem(
     ? payload.id
     : undefined;
   const cleanAssetId = extractAssetUuid(payload.assetId || payload.originalItemId || payload.fileBlobUrl);
-  if (!user || user.isGuest || !cleanAssetId) {
+  const audioUrl = typeof payload.metadata?.audioUrl === 'string' ? payload.metadata.audioUrl : '';
+  const isValidAudioUrl = /^https?:\/\/\S+$/i.test(audioUrl);
+  const isAudio = payload.metadata?.isAudio === true && isValidAudioUrl;
+  if (!user || user.isGuest || (!cleanAssetId && !isAudio)) {
     return {
       success: false,
       id: '',
       error: !user || user.isGuest
         ? 'Entre com sua conta para publicar.'
-        : 'O arquivo 3D precisa estar salvo no banco antes de publicar.',
+        : 'O arquivo precisa estar salvo no banco antes de publicar.',
     };
   }
 
@@ -59,6 +62,8 @@ export async function persistStoreItem(
       metadata: {
         ...(payload.metadata || {}),
         asset_id: cleanAssetId || null,
+        isAudio,
+        audioUrl: isAudio ? audioUrl : undefined,
         publisher_email: user?.email?.trim().toLowerCase() || null,
         author: user?.displayName || payload.author || 'Luzenne',
         isAccessory: payload.objectType === 'acessorio',
@@ -333,10 +338,23 @@ export async function fetchPublicStoreItems(): Promise<{
 
       for (const row of data) {
         const extractedUuid = extractAssetUuid(row);
+        const audioUrl =
+          typeof row.metadata?.audioUrl === 'string' &&
+          /^https?:\/\/\S+$/i.test(row.metadata.audioUrl)
+            ? row.metadata.audioUrl
+            : undefined;
+        const isAudio = row.metadata?.isAudio === true && Boolean(audioUrl);
         const hasPrice = row.price !== null && row.price !== undefined && String(row.price).trim() !== '';
         const price = Number(row.price);
-        if (!row.id || !extractedUuid || seenAssets.has(extractedUuid) || !hasPrice || !Number.isFinite(price) || price < 0) continue;
-        seenAssets.add(extractedUuid);
+        if (
+          !row.id ||
+          (!extractedUuid && !isAudio) ||
+          (extractedUuid && seenAssets.has(extractedUuid)) ||
+          !hasPrice ||
+          !Number.isFinite(price) ||
+          price < 0
+        ) continue;
+        if (extractedUuid) seenAssets.add(extractedUuid);
         const isOwnedByCurrentUser = Boolean(currentUserId && row.user_id === currentUserId);
 
         if (row.object_type === 'avatar') {
@@ -382,6 +400,7 @@ export async function fetchPublicStoreItems(): Promise<{
             pendingAvatarKey: row.metadata?.pendingAvatarKey || undefined,
             pendingAvatarName: row.metadata?.pendingAvatarName || undefined,
             rarity: row.rarity || 'COMUM',
+            actions: Array.isArray(row.metadata?.actions) ? row.metadata.actions : [],
           });
         } else {
           const isAcessorio = row.object_type === 'acessorio' || Boolean(row.metadata?.isAccessory);
@@ -391,7 +410,9 @@ export async function fetchPublicStoreItems(): Promise<{
             createdAt: row.created_at || undefined,
             code: `#${isAcessorio ? 'AC' : 'IT'}${row.id.slice(0, 3).toUpperCase()}`,
             name: row.name,
-            category: isAcessorio
+            category: isAudio
+              ? 'outros'
+              : isAcessorio
               ? 'acessorios'
               : row.object_type === 'moveis'
                 ? 'mobilia'
@@ -410,9 +431,13 @@ export async function fetchPublicStoreItems(): Promise<{
             fileBlobUrl: undefined, // URLs são resolvidas dinamicamente via /resolve
             description: row.description,
             isAccessory: isAcessorio,
+            isActionAsset: row.metadata?.isActionAsset === true,
+            isAudio,
+            audioUrl,
+            audioIsRadio: row.metadata?.audioIsRadio === true,
             accessoryAttachment: row.metadata?.accessoryAttachment || (isAcessorio ? 'companion_float' : undefined),
             accessoryTransform: row.metadata?.accessoryTransform,
-            actions: row.metadata?.actions || [],
+            actions: Array.isArray(row.metadata?.actions) ? row.metadata.actions : [],
             activeActionId: row.metadata?.actions?.[0]?.id || null,
             originalItemId: extractedUuid || row.metadata?.originalItemId || row.id,
             isMissingAsset: false,
@@ -487,6 +512,69 @@ export async function fetchUserInventoryFromDatabase(
   return data || [];
 }
 
+export async function createUserAudioAsset(
+  user: CreatorUser | null,
+  audio: { name: string; audioUrl: string; isRadio: boolean }
+): Promise<{ id: string }> {
+  if (!user || user.isGuest || user.id.startsWith('local-')) {
+    throw new Error('Entre com uma conta Supabase para salvar áudios.');
+  }
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Authenticated user does not match audio owner.');
+  }
+  const { data, error } = await supabase
+    .from('user_audio_assets')
+    .insert({
+      user_id: user.id,
+      name: audio.name,
+      audio_url: audio.audioUrl,
+      is_radio: audio.isRadio,
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchUserAudioAssets(user: CreatorUser | null) {
+  if (!user || user.isGuest || user.id.startsWith('local-')) return [];
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Authenticated user does not match audio owner.');
+  }
+  const { data, error } = await supabase
+    .from('user_audio_assets')
+    .select('id,name,audio_url,is_radio,published_store_item_id,created_at')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function markUserAudioAssetPublished(
+  user: CreatorUser | null,
+  audioAssetId: string,
+  storeItemId: string
+): Promise<void> {
+  if (!user || user.isGuest || user.id.startsWith('local-')) {
+    throw new Error('Entre com sua conta para publicar áudios.');
+  }
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Authenticated user does not match audio owner.');
+  }
+  const { data, error } = await supabase
+    .from('user_audio_assets')
+    .update({ published_store_item_id: storeItemId })
+    .eq('id', audioAssetId)
+    .eq('user_id', user.id)
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('The audio asset was not found in the authenticated user inventory.');
+}
+
 export async function fetchUserWalletFromDatabase(user: CreatorUser | null): Promise<number> {
   if (!user || user.isGuest) {
     throw new Error('Entre com sua conta para consultar o saldo.');
@@ -520,7 +608,7 @@ export async function purchaseStoreItemFromDatabase(
     throw authError || new Error('Sua sessão expirou. Entre novamente para comprar.');
   }
 
-  const { data, error } = await supabase.rpc('purchase_store_item', {
+  const { data, error } = await supabase.rpc('purchase_store_item_and_clear_wishlist', {
     p_store_item_id: storeItemId,
   });
   if (error) {
@@ -542,6 +630,96 @@ export async function purchaseStoreItemFromDatabase(
     throw new Error('O banco não confirmou a compra.');
   }
   return { coins: data.coins, alreadyOwned: Boolean(data.already_owned) };
+}
+
+export async function fetchWishlistStoreItemIds(
+  user: CreatorUser | null,
+  ownerUserId = user?.id
+): Promise<string[]> {
+  if (!user || user.isGuest || user.id.startsWith('local-') || !ownerUserId) return [];
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Sua sessão expirou. Entre novamente.');
+  }
+  const { data, error } = await supabase
+    .from('user_wishlists')
+    .select('store_item_id')
+    .eq('user_id', ownerUserId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data || []).map((row) => row.store_item_id);
+}
+
+export async function setWishlistStoreItem(
+  user: CreatorUser | null,
+  storeItemId: string,
+  shouldSave: boolean
+): Promise<void> {
+  if (!user || user.isGuest || user.id.startsWith('local-') || !storeItemId) {
+    throw new Error('Entre com uma conta para usar sua wishlist.');
+  }
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Sua sessão expirou. Entre novamente.');
+  }
+
+  const query = shouldSave
+    ? supabase.from('user_wishlists').upsert(
+        { user_id: user.id, store_item_id: storeItemId },
+        { onConflict: 'user_id,store_item_id' }
+      )
+    : supabase
+        .from('user_wishlists')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('store_item_id', storeItemId);
+  const { error } = await query;
+  if (error) throw error;
+}
+
+export async function purchaseStoreItemAsGift(
+  user: CreatorUser | null,
+  storeItemId: string,
+  recipientUserId: string,
+  requireWishlist = false
+): Promise<number> {
+  if (!user || user.isGuest || user.id.startsWith('local-')) {
+    throw new Error('Entre com uma conta para presentear.');
+  }
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || authData.user?.id !== user.id) {
+    throw authError || new Error('Sua sessão expirou. Entre novamente para presentear.');
+  }
+  const { data, error } = await supabase.rpc('purchase_store_gift', {
+    p_store_item_id: storeItemId,
+    p_recipient_user_id: recipientUserId,
+    p_require_wishlist: requireWishlist,
+  });
+  if (error) {
+    if (error.message.includes('INSUFFICIENT_COINS')) {
+      throw new Error('Saldo insuficiente para comprar este presente.');
+    }
+    if (error.message.includes('RECIPIENT_ALREADY_OWNS_ITEM')) {
+      throw new Error('Esta pessoa já possui esse item.');
+    }
+    if (error.message.includes('GIFT_RECIPIENT_NOT_FRIEND')) {
+      throw new Error('Escolha um amigo com amizade aceita.');
+    }
+    if (error.message.includes('ITEM_NOT_ON_RECIPIENT_WISHLIST')) {
+      throw new Error('Este item não está mais na wishlist da pessoa.');
+    }
+    if (error.message.includes('STORE_ITEM_NOT_FOUND')) {
+      throw new Error('Este item não está mais disponível na loja.');
+    }
+    if (error.message.includes('STORE_ITEM_ASSET_MISSING')) {
+      throw new Error('O arquivo 3D deste item não está disponível no banco.');
+    }
+    throw error;
+  }
+  if (!data || typeof data.coins !== 'number') {
+    throw new Error('O banco não confirmou o envio do presente.');
+  }
+  return data.coins;
 }
 
 /**

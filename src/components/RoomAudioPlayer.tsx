@@ -23,6 +23,8 @@ interface RoomAudioPlayerProps {
   playlist?: AudioPlaylistItem[];
   roomName?: string;
   isCreator?: boolean;
+  temporaryAudio?: { track: AudioPlaylistItem; ownerSessionId: string } | null;
+  onTemporaryAudioEnded?: () => void;
   onUpdateAudioConfig?: (config: { radioUrl?: string; playlist?: AudioPlaylistItem[]; audioEnabled?: boolean }) => void;
 }
 
@@ -33,6 +35,8 @@ export const RoomAudioPlayer: React.FC<RoomAudioPlayerProps> = ({
   playlist: propPlaylist = [],
   roomName = 'Sala 3D',
   isCreator = true,
+  temporaryAudio = null,
+  onTemporaryAudioEnded,
   onUpdateAudioConfig,
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
@@ -61,6 +65,7 @@ export const RoomAudioPlayer: React.FC<RoomAudioPlayerProps> = ({
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const wasTemporaryAudioRef = useRef(false);
 
   // Sync prop changes
   useEffect(() => {
@@ -77,17 +82,41 @@ export const RoomAudioPlayer: React.FC<RoomAudioPlayerProps> = ({
   }, [propPlaylist]);
 
   // Determine current audio source
-  const currentUrl = activeSourceType === 'radio'
+  const baseUrl = activeSourceType === 'radio'
     ? radioStreamUrl
     : playlist[currentTrackIndex]?.url || radioStreamUrl;
 
-  const currentTitle = activeSourceType === 'radio'
+  const baseTitle = activeSourceType === 'radio'
     ? '📻 Rádio Pop/Rock ao Vivo'
     : playlist[currentTrackIndex]?.title || 'Música da Sala';
 
-  const currentArtist = activeSourceType === 'radio'
+  const baseArtist = activeSourceType === 'radio'
     ? 'Transmissão Contínua'
     : playlist[currentTrackIndex]?.artist || roomName;
+  const currentUrl = temporaryAudio?.track.url || baseUrl;
+  const currentTitle = temporaryAudio?.track.title || baseTitle;
+  const currentArtist = temporaryAudio?.track.artist || baseArtist;
+
+  useEffect(() => {
+    if (temporaryAudio) {
+      wasTemporaryAudioRef.current = true;
+      setAudioError(null);
+      audioRef.current?.load();
+      audioRef.current?.play().then(() => setIsPlaying(true)).catch((error) => {
+        console.warn('[Audio Player] Temporary room audio could not autoplay:', error);
+        setAudioError('Clique em reproduzir para ouvir o áudio aplicado na sala.');
+        setIsPlaying(false);
+      });
+      return;
+    }
+    if (wasTemporaryAudioRef.current) {
+      wasTemporaryAudioRef.current = false;
+      audioRef.current?.load();
+      audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {
+        setIsPlaying(false);
+      });
+    }
+  }, [temporaryAudio?.track.id, temporaryAudio?.track.url]);
 
   // Sync audio element volume
   useEffect(() => {
@@ -211,7 +240,9 @@ export const RoomAudioPlayer: React.FC<RoomAudioPlayerProps> = ({
           setIsPlaying(false);
         }}
         onEnded={() => {
-          if (activeSourceType === 'playlist') {
+          if (temporaryAudio && !temporaryAudio.track.isRadio) {
+            onTemporaryAudioEnded?.();
+          } else if (!temporaryAudio && activeSourceType === 'playlist') {
             handleNextTrack();
           }
         }}

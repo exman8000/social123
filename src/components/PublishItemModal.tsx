@@ -34,6 +34,7 @@ interface PublishItemModalProps {
   item: InventoryItem | null;
   user?: CreatorUser | null;
   availableAvatars?: StoreAvatar[];
+  availableActions?: InventoryItem[];
   attachInfo?: {
     poses: { id: string; name: string; published: boolean }[];
     unpublishedAvatars: string[];
@@ -55,6 +56,7 @@ interface PublishItemModalProps {
     bundlePoses?: boolean;
     updateExistingId?: string;
     actions?: ObjectAction[];
+    isActionAsset?: boolean;
     accessoryAttachment?: AccessoryAttachmentPoint;
     accessoryTransform?: AccessoryTransform;
   }) => Promise<void> | void;
@@ -67,6 +69,7 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
   item,
   user,
   availableAvatars = [],
+  availableActions = [],
   attachInfo,
   onConfirmPublish,
   onGoToStore,
@@ -91,6 +94,9 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
     useState<AccessoryAttachmentPoint>('companion_float');
   const [actions, setActions] = useState<ObjectAction[]>([]);
   const [newActionName, setNewActionName] = useState('');
+  const [publishActionId, setPublishActionId] = useState<string | null>(null);
+  const [publishAudioAsAction, setPublishAudioAsAction] = useState(false);
+  const [attachedActionItemIds, setAttachedActionItemIds] = useState<string[]>([]);
 
   // Initialize or synchronize form whenever item changes
   useEffect(() => {
@@ -98,13 +104,25 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
       setTitle(item.displayName || 'Novo Item 3D');
       setThumbUrl(item.thumbUrl || '');
       setHasSaved(false);
+      setPublishActionId(null);
+      setPublishAudioAsAction(false);
+      setAttachedActionItemIds(
+        (item.actions || [])
+          .map((action) => action.sourceStoreItemId)
+          .filter((id): id is string => Boolean(id))
+      );
       setAssociatedAvatarIds([]);
       setPoseAccess('requires_avatar');
       setBundlePoses(true);
       setPublishAs('update');
       const lower = (item.displayName || '').toLowerCase();
       const itemTypeLower = String(item.type || '').toLowerCase();
-      if (itemTypeLower === 'avatar') {
+      if (item.isAudio) {
+        setObjectType('acessorio');
+        setHashtags('#audio, #radio, #acessorio');
+        setPrice(0);
+        setRarity('COMUM');
+      } else if (itemTypeLower === 'avatar') {
         setObjectType('avatar');
         setHashtags('#avatar, #personagem, #3d');
         setPrice(150);
@@ -277,6 +295,49 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
       const associatedNames = availableAvatars
         .filter((a) => associatedAvatarIds.includes(a.id))
         .map((a) => a.name);
+      const selectedAction = actions.find((action) => action.id === publishActionId);
+      const audioAction: ObjectAction | null =
+        item.isAudio && publishAudioAsAction && item.audioUrl
+          ? {
+              id: `audio-action-${item.storeItemId || item.id}`,
+              name: finalName,
+              kind: 'audio',
+              audioUrl: item.audioUrl,
+              audioIsRadio: item.audioIsRadio,
+              motion: {
+                enabled: true,
+                deltaPosition: [0, 0, 0],
+                speed: 1,
+                loop: false,
+                target: 'parent_object',
+              },
+            }
+          : null;
+      const attachedPoseActions =
+        objectType === 'pose'
+          ? availableActions
+              .filter((actionItem) => attachedActionItemIds.includes(actionItem.storeItemId || actionItem.id))
+              .flatMap((actionItem) =>
+                (actionItem.actions || []).map((action) => ({
+                  ...action,
+                  sourceStoreItemId: actionItem.storeItemId || actionItem.id,
+                }))
+              )
+          : [];
+      const submittedActions = audioAction
+        ? [audioAction]
+        : selectedAction
+          ? [selectedAction]
+          : actions;
+      const finalActions = [
+        ...submittedActions,
+        ...attachedPoseActions,
+      ].filter((action, index, all) =>
+        all.findIndex((candidate) =>
+          candidate.id === action.id ||
+          Boolean(candidate.sourceStoreItemId && candidate.sourceStoreItemId === action.sourceStoreItemId)
+        ) === index
+      );
 
       await onConfirmPublish({
         item,
@@ -292,7 +353,8 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
           objectType === 'pose' && associatedAvatarIds.length > 0 ? associatedAvatarIds : undefined,
         associatedAvatarNames:
           objectType === 'pose' && associatedNames.length > 0 ? associatedNames : undefined,
-        actions: actions.length > 0 ? actions : undefined,
+        actions: finalActions.length > 0 ? finalActions : undefined,
+        isActionAsset: Boolean(audioAction || selectedAction),
         poseAccess: objectType === 'pose' || objectType === 'avatar' ? poseAccess : undefined,
         bundlePoses: objectType === 'avatar' ? bundlePoses : undefined,
         updateExistingId: matchedExisting && publishAs === 'update' ? matchedExisting.id : undefined,
@@ -333,7 +395,7 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
       case 'avatar':
         return '👤 Avatar 3D';
       case 'acessorio':
-        return '👑 Acessório';
+        return item?.isAudio ? '🎧 Áudio' : '👑 Acessório';
       case 'pose':
         return '🎭 Pose';
       case 'moveis':
@@ -351,7 +413,7 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
           <div className="flex items-center gap-2">
             <ShoppingBag className="w-5 h-5 text-[#ffd700]" />
             <h2 className="text-sm font-extrabold tracking-wider text-[#e8d5b5] uppercase">
-              Publicar na Vitrine & Loja
+              {objectType === 'sala' ? 'Publicar sala na Loja' : 'Publicar na Loja'}
             </h2>
           </div>
           <button
@@ -362,6 +424,13 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {objectType === 'sala' && (
+          <p className="mt-3 rounded-lg border border-sky-400/25 bg-sky-950/25 p-3 text-[11px] text-sky-100">
+            Esta publicação vende o modelo da sala na Loja. Ela não publica sua room na Vitrine; para isso, use “Publicar Sala” no editor.
+            No modo simples, a sala é grátis. No avançado, defina o custo em créditos.
+          </p>
+        )}
 
         {/* Mode Selector (Simples vs Avançado) */}
         <div className="grid grid-cols-2 gap-2 mt-4 p-1 bg-black/60 rounded-xl border border-[#d4af37]/30">
@@ -465,7 +534,7 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
                 [
                   { id: 'sala', label: '🏛️ Sala' },
                   { id: 'avatar', label: '👤 Avatar' },
-                  { id: 'acessorio', label: '👑 Acessório' },
+                  { id: 'acessorio', label: item.isAudio ? '🎧 Áudio (acessório)' : '👑 Acessório' },
                   { id: 'pose', label: '🎭 Pose' },
                   { id: 'moveis', label: '🛋️ Móvel' },
                   { id: 'item', label: '📦 Objeto' },
@@ -488,7 +557,23 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
           </div>
 
           {/* Se for ACESSÓRIO: Ponto de Fixação no Avatar */}
-          {objectType === 'acessorio' && (
+          {item.isAudio && (
+            <div className="space-y-2 rounded-xl border border-cyan-400/30 bg-cyan-950/25 p-3 text-[11px] text-cyan-100">
+              <p>
+                O item será publicado na categoria <strong>Áudios</strong>. Outros usuários poderão aplicá-lo temporariamente nas salas.
+              </p>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={publishAudioAsAction}
+                  onChange={(event) => setPublishAudioAsAction(event.target.checked)}
+                />
+                Publicar como action de áudio anexável a poses
+              </label>
+            </div>
+          )}
+
+          {objectType === 'acessorio' && !item.isAudio && (
             <div className="p-3 rounded-xl bg-black/60 border border-[#ffd700]/50 space-y-2 animate-fade-in">
               <label className="font-semibold text-xs text-[#ffd700] flex items-center gap-1.5">
                 <Compass className="w-3.5 h-3.5 text-[#ffd700]" />
@@ -520,6 +605,36 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
                     {att.label}
                   </button>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {objectType === 'pose' && availableActions.length > 0 && (
+            <div className="space-y-2 rounded-xl border border-cyan-500/40 bg-cyan-950/20 p-3">
+              <p className="text-xs font-semibold text-cyan-200">Actions compradas para esta pose</p>
+              <div className="space-y-1.5">
+                {availableActions.map((actionItem) => {
+                  const actionItemId = actionItem.storeItemId || actionItem.id;
+                  return (
+                    <label key={actionItemId} className="flex items-center gap-2 text-[11px] text-zinc-200">
+                      <input
+                        type="checkbox"
+                        checked={attachedActionItemIds.includes(actionItemId)}
+                        onChange={(event) =>
+                          setAttachedActionItemIds((current) =>
+                            event.target.checked
+                              ? [...new Set([...current, actionItemId])]
+                              : current.filter((id) => id !== actionItemId)
+                          )
+                        }
+                      />
+                      <span>{actionItem.displayName || actionItem.name}</span>
+                      <span className="text-[10px] text-cyan-300">
+                        {actionItem.actions?.some((action) => action.kind === 'audio') ? 'Áudio' : 'Movimento'}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -601,6 +716,25 @@ export const PublishItemModal: React.FC<PublishItemModalProps> = ({
                         </div>
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextId = publishActionId === act.id ? null : act.id;
+                        setPublishActionId(nextId);
+                        if (nextId) {
+                          setTitle(act.name);
+                          setPublishAs('new');
+                        }
+                      }}
+                      className={`mr-2 rounded px-2 py-1 text-[9px] font-bold ${
+                        publishActionId === act.id
+                          ? 'bg-cyan-400/20 text-cyan-100'
+                          : 'text-cyan-300 hover:bg-cyan-400/10'
+                      }`}
+                      title="Publicar esta action separadamente"
+                    >
+                      {publishActionId === act.id ? 'Action selecionada' : 'Publicar action'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => handleRemoveAction(act.id)}

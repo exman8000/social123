@@ -8,6 +8,7 @@ import {
   RotateCcw,
   X,
   Maximize2,
+  Gift,
 } from 'lucide-react';
 import { ChatMessage } from '../types';
 
@@ -18,6 +19,8 @@ interface GlassChatProps {
   // Mobile dock mode: always expanded, closed by the parent dock
   embedded?: boolean;
   onClose?: () => void;
+  currentUserId?: string;
+  onViewUserWishlist?: (userId: string, displayName: string) => void;
 }
 
 export const GlassChat: React.FC<GlassChatProps> = ({
@@ -26,6 +29,8 @@ export const GlassChat: React.FC<GlassChatProps> = ({
   onSendMessage,
   embedded = false,
   onClose,
+  currentUserId,
+  onViewUserWishlist,
 }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -269,6 +274,20 @@ export const GlassChat: React.FC<GlassChatProps> = ({
                 <span className="text-[11px] font-semibold text-[#facc15] tracking-wide truncate">
                   {msg.user}
                 </span>
+                {msg.senderUserId && msg.senderUserId !== currentUserId && onViewUserWishlist && (
+                  <button
+                    type="button"
+                    onClick={() => onViewUserWishlist(msg.senderUserId!, msg.user)}
+                    aria-label={`Ver wishlist de ${msg.user}`}
+                    title={`Ver wishlist de ${msg.user}`}
+                    className="rounded p-0.5 text-pink-300 transition-colors hover:bg-pink-400/10 hover:text-pink-200"
+                  >
+                    <Gift className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                {msg.username && (
+                  <span className="ml-1 text-[9px] text-zinc-400 truncate">@{msg.username}</span>
+                )}
                 <span className="text-[9px] text-zinc-400 select-none">
                   {msg.time}
                 </span>
