@@ -51,6 +51,7 @@ import { safeLocalStorageSet, sanitizeItemsForStorage } from './lib/storageUtils
 import { fetchRemoteInventory } from './lib/assetSyncClient';
 import { Lightbulb, Sparkles, Maximize2, Minimize2 } from 'lucide-react';
 import { StoreSocialModal, StoreSocialModalState } from './components/StoreSocialModal';
+import { BonePoseEditor } from './components/BonePoseEditor';
 
 const getStoredCreatorUserId = () => {
   try {
@@ -67,6 +68,8 @@ const poseActionAttachmentStorageKey = (userId: string) =>
   `3d_social_pose_action_attachments:${userId}`;
 const poseActionExclusionStorageKey = (userId: string) =>
   `3d_social_pose_action_exclusions:${userId}`;
+const localBonePoseStorageKey = (userId: string) =>
+  `3d_social_local_bone_poses:${userId}`;
 const magneticSnapDefaultMigrationKey = (userId: string) =>
   `3d_social_room_movement_magnetic_default_v1:${userId}`;
 
@@ -700,6 +703,7 @@ export const App: React.FC = () => {
   // Selection & 3D Editing State
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>('spot-2');
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [bonePoseEditorAvatar, setBonePoseEditorAvatar] = useState<StoreAvatar | null>(null);
   const [customAvatarObjectId, setCustomAvatarObjectId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [activeGizmoMode, setActiveGizmoMode] = useState<GizmoEditMode>('mover');
@@ -1351,7 +1355,16 @@ export const App: React.FC = () => {
       } catch (error) {
         console.warn('Não foi possível aplicar as actions locais das poses:', error);
       }
-      const poses = storeResult.poses.map((pose) => ({
+      let localBonePoses: AvatarPoseConfig[] = [];
+      try {
+        const parsedLocalPoses = JSON.parse(
+          localStorage.getItem(localBonePoseStorageKey(user?.id || 'guest')) || '[]'
+        );
+        if (Array.isArray(parsedLocalPoses)) localBonePoses = parsedLocalPoses;
+      } catch (error) {
+        console.warn('Não foi possível carregar as poses locais criadas com bones:', error);
+      }
+      const poses = [...storeResult.poses, ...localBonePoses].map((pose) => ({
         ...pose,
         actions: [
           ...(pose.actions || []).filter(
@@ -1362,6 +1375,7 @@ export const App: React.FC = () => {
           ),
         ],
         owned:
+          Boolean(pose.boneRotations) ||
           ownedForAccount(pose.id, pose.assetId, pose.ownerUserId) ||
           avatars.some((avatar) => {
             if (!avatar.owned) return false;
@@ -1712,6 +1726,61 @@ export const App: React.FC = () => {
         p.id === poseId ? { ...p, applied: false } : p
       )
     );
+  };
+
+  const handleCreateBonePose = (
+    poseName: string,
+    boneRotations: Record<string, [number, number, number]>,
+    avatar: StoreAvatar
+  ) => {
+    const pose: AvatarPoseConfig = {
+      id: `bone-pose-${crypto.randomUUID()}`,
+      name: poseName,
+      applied: false,
+      createdAt: new Date().toISOString(),
+      thumbnailUrl: avatar.thumb,
+      owned: true,
+      author: user?.displayName || 'Criador',
+      ownerUserId: user?.id,
+      isPublishedByCreator: false,
+      associatedAvatarIds: [avatar.id, avatar.assetId, avatar.originalItemId].filter(
+        (id): id is string => Boolean(id)
+      ),
+      associatedAvatarNames: [avatar.name],
+      access: 'requires_avatar',
+      boneRotations,
+    };
+    setAvatarPoses((current) => dedupeAvatarPoses([...current, pose]));
+    try {
+      const key = localBonePoseStorageKey(user?.id || 'guest');
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      const savedPoses = Array.isArray(existing) ? existing : [];
+      safeLocalStorageSet(key, JSON.stringify([...savedPoses.filter((saved: AvatarPoseConfig) => saved.id !== pose.id), pose]));
+    } catch (error) {
+      console.error('A pose foi criada, mas não foi possível salvá-la neste navegador:', error);
+      showToast('A pose foi criada, mas não conseguiu ser salva neste navegador.');
+      return;
+    }
+    showToast(`Pose "${poseName}" salva localmente para ${avatar.name}.`);
+  };
+
+  const handleOpenBonePoseEditor = (item: InventoryItem) => {
+    setBonePoseEditorAvatar({
+      id: item.id,
+      name: item.displayName || item.name || item.fileName,
+      rarity: 'COMUM',
+      price: 0,
+      thumb: item.thumbUrl || item.thumbnailUrl || '',
+      tags: [],
+      owned: true,
+      applied: false,
+      assetId: item.assetId || item.id,
+      originalItemId: item.assetId || item.id,
+      fileBlobUrl: item.fileBlobUrl,
+      author: user?.displayName,
+      ownerUserId: item.ownerUserId || user?.id,
+      actions: item.actions,
+    });
   };
 
   const handleTogglePoseAction = (poseId: string, action: ObjectAction, attached: boolean) => {
@@ -3572,6 +3641,7 @@ export const App: React.FC = () => {
             onOpenUploadModal={() => setIsUploadModalOpen(true)}
             onOpenAudioUploadModal={() => setIsAudioUploadModalOpen(true)}
             onInsertAssetToScene={handleInsertAssetToScene}
+            onCreateBonePoseFromAsset={handleOpenBonePoseEditor}
             onAddSpot={handleAddSpot}
             onRenameSpot={handleRenameSpot}
             onRemoveSpot={handleRemoveSpot}
@@ -4013,6 +4083,13 @@ export const App: React.FC = () => {
     user={user}
     onRestoreProject={handleRestoreProject}
   />
+  {bonePoseEditorAvatar && (
+    <BonePoseEditor
+      avatar={bonePoseEditorAvatar}
+      onClose={() => setBonePoseEditorAvatar(null)}
+      onSave={(name, rotations) => handleCreateBonePose(name, rotations, bonePoseEditorAvatar)}
+    />
+  )}
 </>
 );
 };

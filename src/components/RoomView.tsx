@@ -169,6 +169,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
         associatedAvatarIds: o.attachedAvatarIds,
         associatedAvatarNames: linkedAvatarNames,
         actions: o.actions,
+        boneRotations: o.boneRotations,
         access: 'requires_avatar' as const,
         isPublishedByCreator: false,
       }));
@@ -192,6 +193,7 @@ export const RoomView: React.FC<RoomViewProps> = ({
             pendingAvatarName: p.pendingAvatarName,
             access: p.access,
             actions: p.actions,
+            boneRotations: p.boneRotations,
             sourceObjectId: p.sourceObjectId,
             assetId: p.assetId,
             fileBlobUrl: p.fileBlobUrl,

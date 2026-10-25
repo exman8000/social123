@@ -357,7 +357,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
   const remotePlayerSceneKey = (remotePlayers || [])
     .map(
       (player) =>
-        `${player.userId}:${player.displayName || ''}:${player.avatar?.id || ''}:${player.avatar?.name || ''}:${player.avatar?.assetId || ''}:${player.avatar?.fileBlobUrl || ''}:${player.avatar?.asset_url || ''}:${player.avatar?.url || ''}:${player.customAvatarAssetId || ''}:${player.customAvatarUrl || ''}:${player.avatarUrl || ''}:${player.pose?.id || ''}:${player.pose?.name || ''}:${player.pose?.assetId || ''}:${player.pose?.fileBlobUrl || ''}:${player.pose?.glbKey || ''}`
+        `${player.userId}:${player.displayName || ''}:${player.avatar?.id || ''}:${player.avatar?.name || ''}:${player.avatar?.assetId || ''}:${player.avatar?.fileBlobUrl || ''}:${player.avatar?.asset_url || ''}:${player.avatar?.url || ''}:${player.customAvatarAssetId || ''}:${player.customAvatarUrl || ''}:${player.avatarUrl || ''}:${player.pose?.id || ''}:${player.pose?.name || ''}:${player.pose?.assetId || ''}:${player.pose?.fileBlobUrl || ''}:${player.pose?.glbKey || ''}:${JSON.stringify(player.pose?.boneRotations || {})}`
     )
     .join('|');
 
@@ -2358,7 +2358,20 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
               glbModel.position.x = -center.x * scale;
               glbModel.position.z = -center.z * scale;
               glbModel.position.y = -box.min.y * scale;
-              if (!isPoseModel) applyRemotePoseAdjustment(glbModel);
+              if (!isPoseModel && player.pose?.boneRotations) {
+                glbModel.traverse((node) => {
+                  if (!(node instanceof THREE.Bone)) return;
+                  const rotation = player.pose.boneRotations[node.name];
+                  if (!rotation) return;
+                  node.rotation.set(
+                    THREE.MathUtils.degToRad(rotation[0]),
+                    THREE.MathUtils.degToRad(rotation[1]),
+                    THREE.MathUtils.degToRad(rotation[2])
+                  );
+                });
+              } else if (!isPoseModel) {
+                applyRemotePoseAdjustment(glbModel);
+              }
 
               playerContainer.remove(fallbackAvatar);
               playerContainer.add(glbModel);
@@ -2600,7 +2613,20 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
           const center = scaledBox.getCenter(new THREE.Vector3());
           m.position.set(-center.x, -scaledBox.min.y, -center.z);
           if (objRotation) m.rotation.set(...objRotation);
-          if (!isPoseModel) applyModelPoseAdjustments(m);
+          if (!isPoseModel && currentPose?.boneRotations) {
+            m.traverse((node) => {
+              if (!(node instanceof THREE.Bone)) return;
+              const rotation = currentPose.boneRotations?.[node.name];
+              if (!rotation) return;
+              node.rotation.set(
+                THREE.MathUtils.degToRad(rotation[0]),
+                THREE.MathUtils.degToRad(rotation[1]),
+                THREE.MathUtils.degToRad(rotation[2])
+              );
+            });
+          } else if (!isPoseModel) {
+            applyModelPoseAdjustments(m);
+          }
           m.traverse((child) => {
             if ((child as THREE.Mesh).isMesh) {
               child.castShadow = true;

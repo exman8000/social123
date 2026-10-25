@@ -102,6 +102,7 @@ export interface PlacedObject {
   accessoryTransform?: AccessoryTransform;
   actions?: ObjectAction[];
   activeActionId?: string | null;
+  boneRotations?: Record<string, [number, number, number]>;
   identifiers?: ObjectIdentifier[]; // Identificadores de ponto (anchors) no objeto/avatar
   position: [number, number, number];
   rotation: [number, number, number];
@@ -264,6 +265,7 @@ export interface AvatarPose {
   pendingAvatarName?: string;
   access?: PoseAccess;
   actions?: ObjectAction[];
+  boneRotations?: Record<string, [number, number, number]>;
 }
 
 export interface Spot {
@@ -445,6 +447,7 @@ export interface AvatarPoseConfig {
   pendingAvatarName?: string;
   bundledInPack?: boolean;
   actions?: ObjectAction[];
+  boneRotations?: Record<string, [number, number, number]>;
 }
 
 export interface RoomAccessSlot {

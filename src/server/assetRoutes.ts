@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { getDatabasePool } from './db';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../lib/supabase';
 import {
@@ -39,6 +40,177 @@ async function getUserIdFromRequest(req: Request): Promise<string | null> {
 
 export function createAssetRouter(): Router {
   const router = Router();
+
+  router.post('/poses/generate', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = await getUserIdFromRequest(req);
+      if (!userId) {
+        res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'Entre na sua conta para usar o assistente de poses.',
+        });
+        return;
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY?.trim();
+      if (!apiKey) {
+        res.status(503).json({
+          error: 'AI_NOT_CONFIGURED',
+          message: 'O assistente de poses ainda não está configurado no servidor.',
+        });
+        return;
+      }
+
+      const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
+      const inputBones: unknown[] = Array.isArray(req.body?.bones) ? req.body.bones : [];
+      if (!prompt || prompt.length > 500 || inputBones.length === 0 || inputBones.length > 250) {
+        res.status(400).json({
+          error: 'INVALID_POSE_REQUEST',
+          message: 'Informe uma descrição de até 500 caracteres e um rig válido.',
+        });
+        return;
+      }
+
+      const bones = inputBones.filter(
+        (bone: unknown): bone is { name: string; parent: string | null; current: number[] } =>
+          Boolean(
+            bone &&
+              typeof bone === 'object' &&
+              typeof (bone as { name?: unknown }).name === 'string' &&
+              (bone as { name: string }).name.length > 0 &&
+              (bone as { name: string }).name.length <= 120 &&
+              Array.isArray((bone as { current?: unknown }).current) &&
+              (bone as { current: unknown[] }).current.length === 3 &&
+              (bone as { current: unknown[] }).current.every(
+                (value) => typeof value === 'number' && Number.isFinite(value)
+              )
+          )
+      );
+      if (!bones.length) {
+        res.status(400).json({
+          error: 'INVALID_RIG',
+          message: 'Não foi possível ler os bones deste avatar.',
+        });
+        return;
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: JSON.stringify({
+          request: prompt,
+          rig: bones.map((bone) => ({
+            name: bone.name,
+            parent: typeof bone.parent === 'string' ? bone.parent : null,
+            currentLocalRotationDegrees: bone.current,
+          })),
+        }),
+        config: {
+          temperature: 0.25,
+          maxOutputTokens: 2000,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          abortSignal: AbortSignal.timeout(30000),
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              poseName: { type: 'STRING' },
+              message: { type: 'STRING' },
+              rotations: {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    bone: { type: 'STRING' },
+                    x: { type: 'NUMBER' },
+                    y: { type: 'NUMBER' },
+                    z: { type: 'NUMBER' },
+                  },
+                  required: ['bone', 'x', 'y', 'z'],
+                },
+              },
+            },
+            required: ['poseName', 'message', 'rotations'],
+          },
+          systemInstruction:
+            'Você é um assistente de animação de avatar 3D. Crie uma pose estática coerente a partir do pedido em português usando somente os bones fornecidos. As rotações são ângulos locais absolutos em graus, não deltas. Preserve os valores atuais de bones que não precisam mudar e retorne apenas os bones alterados. Considere o pai e o nome do bone para identificar lado e função; rigs Mixamo usam nomes como mixamorig:LeftArm, mixamorig:RightArm, LeftUpLeg, LeftLeg, Spine e Head. Para sentar, dobre quadris e joelhos e mantenha o tronco equilibrado. Não invente bones. Limite cada ângulo ao intervalo -180 a 180 graus. Retorne JSON com poseName, message curto em português e rotations contendo bone, x, y, z.',
+        },
+      });
+
+      const text = response.text?.trim();
+      if (!text) {
+        const finishReason = response.candidates?.[0]?.finishReason || 'UNKNOWN';
+        console.warn('[Pose AI] Modelo retornou resposta vazia:', {
+          finishReason,
+          candidateCount: response.candidates?.length || 0,
+        });
+        res.status(502).json({
+          error: 'EMPTY_AI_RESPONSE',
+          message: 'A IA não retornou uma pose desta vez. Tente novamente com uma descrição mais simples.',
+        });
+        return;
+      }
+
+      let parsed: {
+        poseName?: unknown;
+        message?: unknown;
+        rotations?: unknown;
+      };
+      try {
+        parsed = JSON.parse(text);
+      } catch (error) {
+        console.warn('[Pose AI] Modelo retornou conteúdo que não é JSON válido:', error);
+        res.status(502).json({
+          error: 'INVALID_AI_RESPONSE',
+          message: 'A resposta da IA veio incompleta. Tente gerar a pose novamente.',
+        });
+        return;
+      }
+      const allowedBones = new Set(bones.map((bone) => bone.name));
+      const rotations = Array.isArray(parsed.rotations)
+        ? parsed.rotations.flatMap((entry) => {
+            if (!entry || typeof entry !== 'object') return [];
+            const value = entry as { bone?: unknown; x?: unknown; y?: unknown; z?: unknown };
+            if (
+              typeof value.bone !== 'string' ||
+              !allowedBones.has(value.bone) ||
+              ![value.x, value.y, value.z].every(
+                (angle) => typeof angle === 'number' && Number.isFinite(angle)
+              )
+            ) {
+              return [];
+            }
+            return [{
+              bone: value.bone,
+              rotation: [value.x, value.y, value.z].map((angle) =>
+                Math.max(-180, Math.min(180, angle as number))
+              ),
+            }];
+          })
+        : [];
+      if (!rotations.length) {
+        res.status(502).json({
+          error: 'NO_VALID_BONE_ROTATIONS',
+          message: 'Não foi possível gerar rotações para os bones deste rig.',
+        });
+        return;
+      }
+
+      res.status(200).json({
+        poseName: typeof parsed.poseName === 'string' ? parsed.poseName.slice(0, 48) : '',
+        message: typeof parsed.message === 'string'
+          ? parsed.message.slice(0, 300)
+          : 'A pose foi aplicada à prévia.',
+        rotations,
+      });
+    } catch (error) {
+      console.error('[Pose AI] Falha ao gerar pose:', error);
+      res.status(502).json({
+        error: 'POSE_GENERATION_FAILED',
+        message: 'Não foi possível gerar a pose agora. Tente novamente.',
+      });
+    }
+  });
 
   // --------------------------------------------------------------------------
   // 0. Status de configuração das variáveis

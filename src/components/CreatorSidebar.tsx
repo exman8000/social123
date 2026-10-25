@@ -87,6 +87,7 @@ interface CreatorSidebarProps {
   onOpenUploadModal: () => void;
   onOpenAudioUploadModal?: () => void;
   onInsertAssetToScene: (asset: InventoryItem) => void;
+  onCreateBonePoseFromAsset?: (asset: InventoryItem) => void;
   onAddSpot: (type: SpotType, name: string) => void;
   onRenameSpot?: (id: string, name: string) => void;
   onRemoveSpot: (spotId: string) => void;
@@ -162,6 +163,7 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
   onOpenUploadModal,
   onOpenAudioUploadModal,
   onInsertAssetToScene,
+  onCreateBonePoseFromAsset,
   onAddSpot,
   onRenameSpot,  onRemoveSpot,
   onClearAllSpots,
@@ -2833,6 +2835,17 @@ export const CreatorSidebar: React.FC<CreatorSidebarProps> = ({
                     <ShoppingBag className="w-3 h-3 flex-shrink-0" />
                     <span className="truncate">Publicar</span>
                   </button>
+                  {!['audio', 'sala'].includes(item.type.toLowerCase()) && onCreateBonePoseFromAsset && (
+                    <button
+                      type="button"
+                      onClick={() => onCreateBonePoseFromAsset(item)}
+                      className="flex-1 py-1 px-1.5 rounded border border-cyan-400/60 bg-cyan-400/10 hover:bg-cyan-300 hover:text-black text-[10px] font-bold text-cyan-200 tracking-wider uppercase transition-colors cursor-pointer flex items-center justify-center gap-1"
+                      title="Abrir o editor de bones deste modelo 3D rigado"
+                    >
+                      <Activity className="w-3 h-3 flex-shrink-0" />
+                      <span className="truncate">Bones</span>
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

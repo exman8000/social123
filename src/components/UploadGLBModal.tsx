@@ -1,4 +1,7 @@
 import React, { useState } from 'react';
+import * as THREE from 'three';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { X, Box, Check, Upload, Sparkles, ArrowLeft, Tag, Pencil, AlertCircle, RefreshCw } from 'lucide-react';
 import { CreatorUser, InventoryItem, StoreObjectType } from '../types';
 import { uploadGlbDirect } from '../lib/assetSyncClient';
@@ -35,6 +38,7 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
 
   // Direct Upload State
   const [isUploadingToStorage, setIsUploadingToStorage] = useState(false);
+  const [isConvertingFbx, setIsConvertingFbx] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -85,12 +89,17 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
       return;
     }
     if (!file) {
-      setUploadError('Selecione um arquivo .glb para realizar o upload.');
+      setUploadError('Selecione um arquivo .glb ou .fbx para realizar o upload.');
       return;
     }
 
-    // 3. Garante terminação única em .glb sem duplicar (.glb.glb)
-    const cleanBaseName = file.name.replace(/(\.glb)+$/i, '').trim() || 'modelo';
+    const isFbx = /\.fbx$/i.test(file.name);
+    if (!isFbx && !/\.glb$/i.test(file.name)) {
+      setUploadError('Formato não suportado. Envie um arquivo .glb ou .fbx.');
+      return;
+    }
+
+    const cleanBaseName = file.name.replace(/\.(glb|fbx)$/i, '').trim() || 'modelo';
     const finalFileName = `${cleanBaseName}.glb`;
     const finalDisplayName = displayName.trim() || cleanBaseName;
 
@@ -110,8 +119,31 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
 
     setIsUploadingToStorage(true);
     setUploadProgress(0);
+    let fbxScene: THREE.Group | null = null;
 
     try {
+      let fileToUpload = file;
+      if (isFbx) {
+        setIsConvertingFbx(true);
+        fbxScene = new FBXLoader().parse(await file.arrayBuffer(), '');
+        if (!fbxScene.children.length) {
+          throw new Error('O arquivo FBX não contém um modelo 3D válido.');
+        }
+        fbxScene.updateMatrixWorld(true);
+        const exported = await new GLTFExporter().parseAsync(fbxScene, {
+          binary: true,
+          animations: fbxScene.animations,
+          onlyVisible: true,
+        });
+        if (!(exported instanceof ArrayBuffer)) {
+          throw new Error('Não foi possível converter o FBX para GLB.');
+        }
+        fileToUpload = new File([exported], finalFileName, {
+          type: 'model/gltf-binary',
+          lastModified: file.lastModified,
+        });
+      }
+
       const { data: authData, error: authError } = await supabase.auth.getSession();
       if (authError || authData.session?.user.id !== user.id) {
         throw new Error('Sua sessão expirou. Entre novamente para enviar o arquivo.');
@@ -119,7 +151,7 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
       authToken = authData.session.access_token;
       const cat = selectedType === 'Sala' ? 'room_mesh' : selectedType === 'Avatar' ? 'avatar' : 'accessory';
       const res = await uploadGlbDirect(
-        file,
+        fileToUpload,
         cat,
         user.id,
         authToken,
@@ -133,6 +165,13 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
       setIsUploadingToStorage(false);
       return; // Interrompe imediatamente. Não marca o upload como concluído sem PUT 2xx.
     } finally {
+      fbxScene?.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        node.geometry.dispose();
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => material.dispose());
+      });
+      setIsConvertingFbx(false);
       setIsUploadingToStorage(false);
     }
 
@@ -267,7 +306,7 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
 
         {/* Title: ENVIAR ARQUIVO 3D */}
         <h1 className="text-lg md:text-xl font-extrabold tracking-wide text-[#ffd700] uppercase my-4">
-          ENVIAR ARQUIVO 3D (GLB / GLTF)
+          ENVIAR ARQUIVO 3D (GLB / FBX)
         </h1>
 
         {uploadedItem ? (
@@ -588,7 +627,7 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
               <div className="relative border-2 border-dashed border-[#d4af37]/60 rounded-xl p-6 flex flex-col items-center justify-center text-center group cursor-pointer hover:bg-[#d4af37]/10 transition-colors">
                 <input
                   type="file"
-                  accept=".glb,.gltf"
+                  accept=".glb,.fbx"
                   onChange={handleFileChange}
                   className="absolute inset-0 opacity-0 cursor-pointer"
                 />
@@ -599,11 +638,11 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
                 </div>
 
                 <p className="text-sm font-bold text-[#ffd700] mb-2 px-2 break-all">
-                  {file ? file.name : 'Solte o arquivo GLB aqui'}
+                  {file ? file.name : 'Solte um arquivo GLB ou FBX aqui'}
                 </p>
 
                 <p className="text-xs text-[#e8d5b5]/70 mb-3">
-                  {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : 'Clique para procurar em seu computador'}
+                  {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : 'GLB ou FBX (ex.: download do Mixamo)'}
                 </p>
 
                 <div className="px-4 py-2 rounded-lg border border-[#d4af37] text-[#ffd700] text-xs md:text-sm font-bold bg-[#14151a] group-hover:bg-[#d4af37] group-hover:text-black transition-colors flex items-center gap-2 shadow-sm">
@@ -703,7 +742,11 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
               {isUploadingToStorage ? (
                 <>
                   <RefreshCw className="w-5 h-5 animate-spin" />
-                  <span>Enviando direto para S3/R2 ({uploadProgress}%)...</span>
+                  <span>
+                    {isConvertingFbx
+                      ? 'Convertendo FBX para GLB...'
+                      : `Enviando direto para S3/R2 (${uploadProgress}%)...`}
+                  </span>
                 </>
               ) : (
                 <>
