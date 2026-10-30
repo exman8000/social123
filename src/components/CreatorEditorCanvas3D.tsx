@@ -83,6 +83,12 @@ interface CreatorEditorCanvas3DProps {
       scale: [number, number, number];
     }
   ) => void;
+  onUpdateObjectPhysics?: (
+    id: string,
+    physics: Partial<Pick<PlacedObject,
+      'physicsEnabled' | 'physicsPassThroughSeconds' | 'physicsMode' | 'physicsColliders'
+    >>
+  ) => void;
   onRemoveObject: (id: string) => void;
   onUpdateBoundary?: (boundary: PlayableBoundary) => void;
   onSceneClickInsertionPoint: (point: [number, number, number] | null) => void;
@@ -234,6 +240,7 @@ export const CreatorEditorCanvas3D: React.FC<CreatorEditorCanvas3DProps> = ({
   onClearAllSpots,
   onRemoveOverlappingSpots,
   onUpdateObjectTransform,
+  onUpdateObjectPhysics,
   onRemoveObject,
   onUpdateBoundary,
   onSceneClickInsertionPoint,
@@ -3030,6 +3037,68 @@ export const CreatorEditorCanvas3D: React.FC<CreatorEditorCanvas3DProps> = ({
 
   const selectedSpot = spots.find((s) => s.id === selectedSpotId);
   const selectedObj = placedObjects.find((o) => o.id === selectedObjectId);
+  const selectedPhysicsCollidersKey = JSON.stringify(selectedObj?.physicsColliders || []);
+
+  useEffect(() => {
+    if (!selectedObj) return;
+    const objectGroup = meshMapRef.current.get(selectedObj.id);
+    if (!objectGroup) return;
+
+    const previousHelper = objectGroup.children.find(
+      (child) => child.userData.isPhysicsDebugHelper
+    );
+    if (previousHelper) {
+      objectGroup.remove(previousHelper);
+      previousHelper.traverse((child) => {
+        if (child instanceof THREE.LineSegments) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+    }
+
+    if (
+      isAvatarMode ||
+      selectedObj.physicsEnabled === false ||
+      selectedObj.physicsMode !== 'manual' ||
+      !selectedObj.physicsColliders?.length
+    ) {
+      return;
+    }
+
+    const helperGroup = new THREE.Group();
+    helperGroup.userData.isPhysicsDebugHelper = true;
+    selectedObj.physicsColliders.forEach((collider) => {
+      const geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(...collider.size));
+      const material = new THREE.LineBasicMaterial({
+        color: 0x22d3ee,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const outline = new THREE.LineSegments(geometry, material);
+      outline.position.set(...collider.center);
+      outline.renderOrder = 20;
+      helperGroup.add(outline);
+    });
+    objectGroup.add(helperGroup);
+
+    return () => {
+      if (helperGroup.parent) helperGroup.parent.remove(helperGroup);
+      helperGroup.traverse((child) => {
+        if (child instanceof THREE.LineSegments) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+    };
+  }, [
+    isAvatarMode,
+    selectedObj?.id,
+    selectedObj?.physicsEnabled,
+    selectedObj?.physicsMode,
+    selectedPhysicsCollidersKey,
+  ]);
 
   // Precision object transform actions (guarded against NaN and vanishing)
   const handleUpdateObjPos = (axis: 0 | 1 | 2, val: number) => {
@@ -3090,6 +3159,50 @@ export const CreatorEditorCanvas3D: React.FC<CreatorEditorCanvas3DProps> = ({
     if (!selectedObj) return;
     const currentScale = selectedObj.scale[0] || 1;
     handleUpdateObjScale(currentScale + delta);
+  };
+
+  const updatePhysicsCollider = (
+    colliderId: string,
+    field: 'center' | 'size',
+    axis: 0 | 1 | 2,
+    value: number
+  ) => {
+    if (!selectedObj || !onUpdateObjectPhysics || !Number.isFinite(value)) return;
+    const colliders = selectedObj.physicsColliders || [];
+    onUpdateObjectPhysics(selectedObj.id, {
+      physicsColliders: colliders.map((collider) => {
+        if (collider.id !== colliderId) return collider;
+        const nextValues = [...collider[field]] as [number, number, number];
+        nextValues[axis] = field === 'size' ? Math.max(0.05, value) : value;
+        return { ...collider, [field]: nextValues };
+      }),
+    });
+  };
+
+  const addPhysicsCollider = () => {
+    if (!selectedObj || !onUpdateObjectPhysics) return;
+    const dimensions =
+      rawDimensionsState[selectedObj.id] ||
+      rawDimensionsMapRef.current.get(selectedObj.id) || {
+        width: 1,
+        height: 1,
+        depth: 1,
+      };
+    const colliders = selectedObj.physicsColliders || [];
+    onUpdateObjectPhysics(selectedObj.id, {
+      physicsColliders: [
+        ...colliders,
+        {
+          id: crypto.randomUUID(),
+          center: [0, dimensions.height / 2, 0],
+          size: [
+            Math.max(0.1, dimensions.width),
+            Math.max(0.1, dimensions.height),
+            Math.max(0.1, dimensions.depth),
+          ],
+        },
+      ],
+    });
   };
 
   // One-click "Encaixar no Metro" button: matches object height to real-world target metric
@@ -4706,6 +4819,164 @@ export const CreatorEditorCanvas3D: React.FC<CreatorEditorCanvas3DProps> = ({
           {/* Body: Direct Numeric Inputs & Steppers */}
           {!isInspectorMinimized && (
             <div className="flex-1 min-h-0 overflow-y-auto p-2.5 grid grid-cols-1 gap-2 text-xs">
+              {onUpdateObjectPhysics && (
+                <section className="rounded-lg border border-cyan-400/30 bg-cyan-950/25 p-2 space-y-2">
+                  <label className="flex items-center justify-between gap-2 text-[10px] font-semibold text-cyan-100">
+                    <span>Física e colisão</span>
+                    <input
+                      type="checkbox"
+                      checked={selectedObj.physicsEnabled !== false}
+                      onChange={(event) =>
+                        onUpdateObjectPhysics(selectedObj.id, {
+                          physicsEnabled: event.target.checked,
+                        })
+                      }
+                      className="accent-cyan-400"
+                    />
+                  </label>
+                  {selectedObj.physicsEnabled !== false && (
+                    <>
+                      <label className="flex items-center justify-between gap-2 text-[10px] text-zinc-300">
+                        <span>Segurar E para atravessar</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          step="1"
+                          value={selectedObj.physicsPassThroughSeconds ?? 3}
+                          onChange={(event) => {
+                            const seconds = Number(event.target.value);
+                            if (Number.isFinite(seconds)) {
+                              onUpdateObjectPhysics(selectedObj.id, {
+                                physicsPassThroughSeconds: Math.min(10, Math.max(1, seconds)),
+                              });
+                            }
+                          }}
+                          className="w-12 rounded border border-cyan-400/30 bg-black/50 px-1 py-0.5 text-center text-cyan-100"
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-1">
+                        {(['automatic', 'manual'] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => {
+                              if (mode === 'manual' && !selectedObj.physicsColliders?.length) {
+                                const dimensions =
+                                  rawDimensionsState[selectedObj.id] ||
+                                  rawDimensionsMapRef.current.get(selectedObj.id) || {
+                                    width: 1,
+                                    height: 1,
+                                    depth: 1,
+                                  };
+                                onUpdateObjectPhysics(selectedObj.id, {
+                                  physicsMode: mode,
+                                  physicsColliders: [{
+                                    id: crypto.randomUUID(),
+                                    center: [0, dimensions.height / 2, 0],
+                                    size: [
+                                      Math.max(0.1, dimensions.width),
+                                      Math.max(0.1, dimensions.height),
+                                      Math.max(0.1, dimensions.depth),
+                                    ],
+                                  }],
+                                });
+                              } else {
+                                onUpdateObjectPhysics(selectedObj.id, { physicsMode: mode });
+                              }
+                            }}
+                            className={`rounded border px-1.5 py-1 text-[9px] font-semibold ${
+                              (selectedObj.physicsMode || 'automatic') === mode
+                                ? 'border-cyan-300 bg-cyan-400/20 text-cyan-100'
+                                : 'border-white/10 bg-black/30 text-zinc-400'
+                            }`}
+                          >
+                            {mode === 'automatic' ? 'Automática' : 'Manual'}
+                          </button>
+                        ))}
+                      </div>
+                      {(selectedObj.physicsMode || 'automatic') === 'manual' && (
+                        <>
+                          <p className="text-[9px] leading-snug text-zinc-400">
+                            Ajuste caixas simplificadas; use várias para paredes e deixe portas livres.
+                          </p>
+                          {(selectedObj.physicsColliders || []).map((collider, index) => (
+                            <div key={collider.id} className="rounded border border-white/10 bg-black/30 p-1.5 space-y-1">
+                              <div className="flex items-center justify-between text-[9px] text-cyan-100">
+                                <span>Caixa {index + 1} · centro X/Y/Z</span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onUpdateObjectPhysics(selectedObj.id, {
+                                      physicsColliders: (selectedObj.physicsColliders || []).filter(
+                                        (item) => item.id !== collider.id
+                                      ),
+                                    })
+                                  }
+                                  className="text-red-300"
+                                  aria-label={`Remover caixa de colisão ${index + 1}`}
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-3 gap-1">
+                                {collider.center.map((value, axis) => (
+                                  <input
+                                    key={`center-${axis}`}
+                                    aria-label={`Centro ${'XYZ'[axis]} da caixa ${index + 1}`}
+                                    type="number"
+                                    step="0.1"
+                                    value={value}
+                                    onChange={(event) =>
+                                      updatePhysicsCollider(
+                                        collider.id,
+                                        'center',
+                                        axis as 0 | 1 | 2,
+                                        Number(event.target.value)
+                                      )
+                                    }
+                                    className="min-w-0 rounded border border-white/10 bg-black/50 px-1 py-0.5 text-center text-[9px] text-white"
+                                  />
+                                ))}
+                              </div>
+                              <span className="text-[9px] text-zinc-400">Tamanho X/Y/Z</span>
+                              <div className="grid grid-cols-3 gap-1">
+                                {collider.size.map((value, axis) => (
+                                  <input
+                                    key={`size-${axis}`}
+                                    aria-label={`Tamanho ${'XYZ'[axis]} da caixa ${index + 1}`}
+                                    type="number"
+                                    min="0.05"
+                                    step="0.1"
+                                    value={value}
+                                    onChange={(event) =>
+                                      updatePhysicsCollider(
+                                        collider.id,
+                                        'size',
+                                        axis as 0 | 1 | 2,
+                                        Number(event.target.value)
+                                      )
+                                    }
+                                    className="min-w-0 rounded border border-white/10 bg-black/50 px-1 py-0.5 text-center text-[9px] text-white"
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={addPhysicsCollider}
+                            className="w-full rounded border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100 hover:bg-cyan-500/20"
+                          >
+                            + Adicionar caixa de colisão
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                </section>
+              )}
+
               {/* Column 1: Posição X, Y, Z */}
               <div className="p-2 rounded-lg bg-black/40 border border-[#d4af37]/20 space-y-1.5">
                 <span className="text-[10px] uppercase font-bold text-[#d4af37] tracking-wider block">

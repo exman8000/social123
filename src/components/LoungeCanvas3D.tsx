@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DoorOpen } from 'lucide-react';
 import {
   AvatarPose,
   AvatarTransform,
@@ -211,6 +212,25 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const playerGroupRef = useRef<THREE.Group | null>(null);
+  const editorRoomRef = useRef(editorRoom);
+  editorRoomRef.current = editorRoom;
+  const physicsSceneRootsRef = useRef<Map<string, THREE.Object3D>>(new Map());
+  const physicsBypassUntilRef = useRef(0);
+  const physicsBypassTimeoutRef = useRef<number | null>(null);
+  const physicsHoldTimeoutRef = useRef<number | null>(null);
+  const [physicsPassageActive, setPhysicsPassageActive] = React.useState(false);
+  const activatePhysicsPassage = () => {
+    physicsBypassUntilRef.current = performance.now() + 5000;
+    setPhysicsPassageActive(true);
+    if (physicsBypassTimeoutRef.current !== null) {
+      window.clearTimeout(physicsBypassTimeoutRef.current);
+    }
+    physicsBypassTimeoutRef.current = window.setTimeout(() => {
+      physicsBypassUntilRef.current = 0;
+      physicsBypassTimeoutRef.current = null;
+      setPhysicsPassageActive(false);
+    }, 5000);
+  };
   const currentPoseRef = useRef(currentPose);
   currentPoseRef.current = currentPose;
   const appliedAvatarActionRef = useRef({
@@ -439,6 +459,7 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     // Architectural Concrete Lounge Room (Default Architecture)
     const defaultArchitectureGroup = new THREE.Group();
     scene.add(defaultArchitectureGroup);
+    physicsSceneRootsRef.current.set('default-room', defaultArchitectureGroup);
 
     const roomMaterial = new THREE.MeshStandardMaterial({
       color: 0x38393c,
@@ -563,6 +584,12 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             });
 
             scene.add(model);
+            const matchingScenario = editorRoomRef.current?.placedObjects.find(
+              (object) =>
+                object.type === 'cenario' &&
+                extractAssetUuid(object.assetId || object.fileBlobUrl) === sceneAssetUuid
+            );
+            physicsSceneRootsRef.current.set(matchingScenario?.id || sceneAssetUuid || 'room-scenario', model);
           },
           undefined,
           (err) => {
@@ -586,10 +613,12 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       defaultArchitectureGroup.visible = false;
       const scarlet = createScarletSalonArchitecture();
       scene.add(scarlet);
+      physicsSceneRootsRef.current.set('default-room', scarlet);
     } else if (editorRoom?.sceneAssetId === 'inv-scene-2') {
       defaultArchitectureGroup.visible = false;
       const loft = createLoftArchitecture();
       scene.add(loft);
+      physicsSceneRootsRef.current.set('default-room', loft);
     }
 
     // Spot Meshes: Glowing circles (círculos brilhantes) + discreet blinking down-arrow
@@ -1436,6 +1465,111 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         );
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, cameraRef.current);
+        const getFirstPhysicsCollision = (from: THREE.Vector3, to: THREE.Vector3) => {
+          const direction = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
+          const distance = direction.length();
+          if (distance < 0.001) return null;
+          direction.normalize();
+
+          const roots: Array<{ id: string; root: THREE.Object3D }> = [];
+          placedObjectsMapRef.current.forEach((root, id) => roots.push({ id, root }));
+          physicsSceneRootsRef.current.forEach((root, id) => roots.push({ id, root }));
+
+          const roomState = editorRoomRef.current;
+          const ray = new THREE.Ray();
+          const nearest: { hit: { distance: number; objectId: string } | null } = {
+            hit: null,
+          };
+          const offsets = [-0.22, 0, 0.22];
+          const heights = [0.12, 0.45, 0.8, 1.15, 1.48];
+
+          roots.forEach(({ id, root }) => {
+            if (!root.visible) return;
+            const object = roomState?.placedObjects.find(
+              (candidate) =>
+                candidate.id === id ||
+                extractAssetUuid(candidate.assetId || candidate.fileBlobUrl) === id
+            );
+            if (object?.physicsEnabled === false) return;
+            const activeSceneAssetId = extractAssetUuid(
+              roomState?.sceneAssetId || roomState?.sceneAssetBlobUrl
+            );
+            if (
+              !object &&
+              (id === activeSceneAssetId || id === 'room-scenario') &&
+              roomState?.scenePhysicsEnabled === false
+            ) {
+              return;
+            }
+            root.updateMatrixWorld(true);
+            const manualMode = object?.physicsMode === 'manual';
+            const meshes: THREE.Mesh[] = [];
+            if (!manualMode) {
+              root.traverse((node) => {
+                if ((node as THREE.Mesh).isMesh) meshes.push(node as THREE.Mesh);
+              });
+            }
+
+            offsets.forEach((offset) => {
+              heights.forEach((height) => {
+                const origin = new THREE.Vector3(
+                  from.x - direction.z * offset,
+                  from.y + height,
+                  from.z + direction.x * offset
+                );
+                ray.set(origin, direction);
+
+                if (manualMode) {
+                  (object.physicsColliders || []).forEach((collider) => {
+                    const half = new THREE.Vector3(...collider.size).multiplyScalar(0.5);
+                    const localBox = new THREE.Box3(
+                      new THREE.Vector3(...collider.center).sub(half),
+                      new THREE.Vector3(...collider.center).add(half)
+                    );
+                    const worldBox = new THREE.Box3();
+                    for (let x = 0; x <= 1; x += 1) {
+                      for (let y = 0; y <= 1; y += 1) {
+                        for (let z = 0; z <= 1; z += 1) {
+                          worldBox.expandByPoint(
+                            new THREE.Vector3(
+                              x ? localBox.max.x : localBox.min.x,
+                              y ? localBox.max.y : localBox.min.y,
+                              z ? localBox.max.z : localBox.min.z
+                            ).applyMatrix4(root.matrixWorld)
+                          );
+                        }
+                      }
+                    }
+                    const point = ray.intersectBox(worldBox, new THREE.Vector3());
+                    if (!point) return;
+                    const hitDistance = origin.distanceTo(point);
+                    if (
+                      hitDistance > 0.18 &&
+                      hitDistance < distance &&
+                      (!nearest.hit || hitDistance < nearest.hit.distance)
+                    ) {
+                      nearest.hit = { distance: hitDistance, objectId: id };
+                    }
+                  });
+                  return;
+                }
+
+                raycaster.ray.copy(ray);
+                const intersections = raycaster.intersectObjects(meshes, false);
+                intersections.forEach((intersection) => {
+                  if (
+                    intersection.distance > 0.18 &&
+                    intersection.distance < distance &&
+                    (!nearest.hit || intersection.distance < nearest.hit.distance)
+                  ) {
+                    nearest.hit = { distance: intersection.distance, objectId: id };
+                  }
+                });
+              });
+            });
+          });
+          return nearest.hit;
+        };
         const getMagneticCollisionBounds = (): THREE.Box3[] => {
           const bounds: THREE.Box3[] = [];
           placedObjectsMapRef.current.forEach((group) => {
@@ -1478,7 +1612,23 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
             teleportAnimationRef.current = null;
             restoreTeleportFade();
             const from = player.position.clone();
-            const path = obstacleBounds.length
+            const collision =
+              performance.now() < physicsBypassUntilRef.current
+                ? null
+                : getFirstPhysicsCollision(from, destination);
+            if (collision) {
+              const direction = new THREE.Vector3(
+                destination.x - from.x,
+                0,
+                destination.z - from.z
+              ).normalize();
+              const allowedDistance = Math.max(0, collision.distance - 0.42);
+              destination.x = from.x + direction.x * allowedDistance;
+              destination.z = from.z + direction.z * allowedDistance;
+            }
+            const path = collision
+              ? [from, destination]
+              : obstacleBounds.length
               ? createCollisionFreePath(from, destination, obstacleBounds)
               : [from, destination];
             const pathLength = path.slice(1).reduce(
@@ -1827,6 +1977,67 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
         }
       }
     };
+    const getPhysicsHoldDuration = () => {
+      const player = playerGroupRef.current;
+      if (!player) return 3000;
+      let nearestDistance = Infinity;
+      let nearestDuration = 3;
+      const roomState = editorRoomRef.current;
+      const roots: Array<{ id: string; root: THREE.Object3D }> = [];
+      placedObjectsMapRef.current.forEach((root, id) => roots.push({ id, root }));
+      physicsSceneRootsRef.current.forEach((root, id) => roots.push({ id, root }));
+      roots.forEach(({ id, root }) => {
+        if (!root.visible) return;
+        const object = roomState?.placedObjects.find(
+          (candidate) =>
+            candidate.id === id ||
+            extractAssetUuid(candidate.assetId || candidate.fileBlobUrl) === id
+        );
+        if (object?.physicsEnabled === false) return;
+        const activeSceneAssetId = extractAssetUuid(
+          roomState?.sceneAssetId || roomState?.sceneAssetBlobUrl
+        );
+        if (
+          !object &&
+          (id === activeSceneAssetId || id === 'room-scenario') &&
+          roomState?.scenePhysicsEnabled === false
+        ) {
+          return;
+        }
+        root.updateMatrixWorld(true);
+        const bounds = new THREE.Box3().setFromObject(root);
+        const nearestX = THREE.MathUtils.clamp(player.position.x, bounds.min.x, bounds.max.x);
+        const nearestZ = THREE.MathUtils.clamp(player.position.z, bounds.min.z, bounds.max.z);
+        const distance = Math.hypot(player.position.x - nearestX, player.position.z - nearestZ);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestDuration = Math.min(10, Math.max(1, object?.physicsPassThroughSeconds ?? 3));
+        }
+      });
+      return nearestDistance <= 1.25 ? nearestDuration * 1000 : null;
+    };
+    const handlePhysicsKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.code !== 'KeyE' ||
+        event.repeat ||
+        interactionDisabledRef.current ||
+        document.activeElement?.tagName === 'INPUT' ||
+        document.activeElement?.tagName === 'TEXTAREA'
+      ) {
+        return;
+      }
+      const holdDuration = getPhysicsHoldDuration();
+      if (holdDuration === null) return;
+      physicsHoldTimeoutRef.current = window.setTimeout(() => {
+        physicsHoldTimeoutRef.current = null;
+        activatePhysicsPassage();
+      }, holdDuration);
+    };
+    const handlePhysicsKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyE' || physicsHoldTimeoutRef.current === null) return;
+      window.clearTimeout(physicsHoldTimeoutRef.current);
+      physicsHoldTimeoutRef.current = null;
+    };
 
     // Resize observer
     const resizeObserver = new ResizeObserver(() => {
@@ -1981,6 +2192,8 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
     domEl.addEventListener('touchend', handleTouchEnd);
     domEl.addEventListener('touchcancel', handleTouchCancel);
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handlePhysicsKeyDown);
+    window.addEventListener('keyup', handlePhysicsKeyUp);
 
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
@@ -1996,6 +2209,17 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       domEl.removeEventListener('touchend', handleTouchEnd);
       domEl.removeEventListener('touchcancel', handleTouchCancel);
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', handlePhysicsKeyDown);
+      window.removeEventListener('keyup', handlePhysicsKeyUp);
+      if (physicsHoldTimeoutRef.current !== null) {
+        window.clearTimeout(physicsHoldTimeoutRef.current);
+        physicsHoldTimeoutRef.current = null;
+      }
+      if (physicsBypassTimeoutRef.current !== null) {
+        window.clearTimeout(physicsBypassTimeoutRef.current);
+        physicsBypassTimeoutRef.current = null;
+      }
+      physicsSceneRootsRef.current.clear();
       domEl.style.touchAction = '';
       teleportAnimationRef.current = null;
       restoreTeleportFade();
@@ -2772,6 +2996,22 @@ export const LoungeCanvas3D: React.FC<LoungeCanvas3DProps> = ({
       <div className="absolute inset-0 pointer-events-none flex justify-center items-center">
         {/* Helper overlay for spot clicks */}
       </div>
+      {!interactionDisabled && (
+        <button
+          type="button"
+          onClick={activatePhysicsPassage}
+          className={`absolute bottom-4 right-4 z-20 flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur transition-colors ${
+            physicsPassageActive
+              ? 'border-emerald-300 bg-emerald-950/90 text-emerald-100'
+              : 'border-cyan-300/50 bg-slate-950/85 text-cyan-100 hover:bg-cyan-950'
+          }`}
+          title="Permite atravessar colisores por 5 segundos"
+          aria-label="Abrir passagem temporária pela física"
+        >
+          <DoorOpen className="h-4 w-4" />
+          {physicsPassageActive ? 'Passagem aberta' : 'Entrar'}
+        </button>
+      )}
     </div>
   );
 };

@@ -2485,6 +2485,8 @@ export const App: React.FC = () => {
         assetId: item.id,
         name: item.displayName,
         type: 'cenario',
+        physicsEnabled: item.physicsEnabled ?? true,
+        physicsPassThroughSeconds: 3,
         position: [targetPoint[0], 0.0, targetPoint[2]] as [number, number, number],
         rotation: [0, 0, 0] as [number, number, number],
         scale: [1, 1, 1] as [number, number, number],
@@ -2500,6 +2502,7 @@ export const App: React.FC = () => {
             ...r,
             sceneAssetId: item.id,
             sceneAssetBlobUrl: item.fileBlobUrl,
+            scenePhysicsEnabled: item.physicsEnabled ?? true,
             placedObjects: [newPlacedObject, ...cleanPlaced],
           };
         })
@@ -2523,6 +2526,8 @@ export const App: React.FC = () => {
         assetId: item.id,
         name: item.displayName,
         type: placedKind,
+        physicsEnabled: item.physicsEnabled ?? true,
+        physicsPassThroughSeconds: 3,
         isAvatar: isAvatarType,
         ...(placedKind === 'pose' ? { isPose: true } : {}),
         position: [targetPoint[0], 0.0, targetPoint[2]] as [number, number, number],
@@ -2566,6 +2571,8 @@ export const App: React.FC = () => {
         assetId: asset.id,
         name: asset.displayName,
         type: 'cenario',
+        physicsEnabled: asset.physicsEnabled ?? true,
+        physicsPassThroughSeconds: 3,
         position: spawnPoint,
         rotation: [0, 0, 0] as [number, number, number],
         scale: [1, 1, 1] as [number, number, number],
@@ -2581,6 +2588,7 @@ export const App: React.FC = () => {
             ...r,
             sceneAssetId: asset.id,
             sceneAssetBlobUrl: asset.fileBlobUrl,
+            scenePhysicsEnabled: asset.physicsEnabled ?? true,
             placedObjects: [newPlacedObject, ...cleanPlaced],
           };
         })
@@ -2601,6 +2609,8 @@ export const App: React.FC = () => {
       assetId: asset.id,
       name: asset.displayName,
       type: placedKind,
+      physicsEnabled: asset.physicsEnabled ?? true,
+      physicsPassThroughSeconds: 3,
       isAvatar: isAvatarType,
       ...(placedKind === 'pose' ? { isPose: true } : {}),
       position: spawnPoint,
@@ -2697,6 +2707,26 @@ export const App: React.FC = () => {
           spots: updatedSpots,
         };
       })
+    );
+  };
+
+  const handleUpdateObjectPhysics = (
+    id: string,
+    physics: Partial<Pick<PlacedObject,
+      'physicsEnabled' | 'physicsPassThroughSeconds' | 'physicsMode' | 'physicsColliders'
+    >>
+  ) => {
+    setRooms((prev) =>
+      prev.map((room) =>
+        room.id === activeRoomId
+          ? {
+              ...room,
+              placedObjects: room.placedObjects.map((object) =>
+                object.id === id ? { ...object, ...physics } : object
+              ),
+            }
+          : room
+      )
     );
   };
 
@@ -2989,6 +3019,7 @@ export const App: React.FC = () => {
                 ...r,
                 sceneAssetBlobUrl: item.fileBlobUrl || undefined,
                 sceneAssetId: item.id,
+                scenePhysicsEnabled: item.physicsEnabled ?? true,
               }
             : r
         )
@@ -3003,6 +3034,8 @@ export const App: React.FC = () => {
       assetId: item.id,
       name: item.displayName,
       type: 'movel' as const,
+      physicsEnabled: item.physicsEnabled ?? true,
+      physicsPassThroughSeconds: 3,
       position: coords,
       rotation: [0, 0, 0] as [number, number, number],
       scale: [1, 1, 1] as [number, number, number],
@@ -3761,6 +3794,7 @@ export const App: React.FC = () => {
               onClearAllSpots={handleClearAllSpots}
               onRemoveOverlappingSpots={handleRemoveOverlappingSpots}
               onUpdateObjectTransform={handleUpdateObjectTransform}
+              onUpdateObjectPhysics={handleUpdateObjectPhysics}
               onRemoveObject={handleRemoveObject}
               onUpdateBoundary={handleSaveBoundary}
               onSceneClickInsertionPoint={(point) => {

@@ -34,6 +34,7 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
   const [displayName, setDisplayName] = useState('');
   const [thumbUrl, setThumbUrl] = useState('');
   const [selectedType, setSelectedType] = useState<'Sala' | 'Avatar' | 'Item' | 'Movel' | 'Acessorio' | 'Pose'>('Item');
+  const [physicsEnabled, setPhysicsEnabled] = useState(true);
   const [uploadedItem, setUploadedItem] = useState<InventoryItem | null>(null);
 
   // Direct Upload State
@@ -202,6 +203,7 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
       displayName: finalDisplayName,
       thumbUrl: finalThumb,
       type: selectedType,
+      physicsEnabled,
       createdAt: 'Agora',
       isScenario: selectedType === 'Sala',
       fileBlobUrl: s3DownloadUrl, // URL assinada do S3! NUNCA blob: depois do complete!
@@ -730,6 +732,21 @@ export const UploadGLBModal: React.FC<UploadGLBModalProps> = ({
                       : 'Item: objeto inserível em qualquer ponto clicado na cena.'}
                   </p>
                 </div>
+
+                <label className="flex items-center justify-between gap-3 rounded-lg border border-cyan-400/30 bg-cyan-950/25 p-3 text-xs text-cyan-100">
+                  <span>
+                    <span className="block font-semibold">Física automática</span>
+                    <span className="text-[10px] text-cyan-100/70">
+                      Impede o avatar de atravessar este objeto na sala.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={physicsEnabled}
+                    onChange={(event) => setPhysicsEnabled(event.target.checked)}
+                    className="h-4 w-4 accent-cyan-400"
+                  />
+                </label>
               </div>
             </div>
 

@@ -103,6 +103,14 @@ export interface PlacedObject {
   actions?: ObjectAction[];
   activeActionId?: string | null;
   boneRotations?: Record<string, [number, number, number]>;
+  physicsEnabled?: boolean;
+  physicsPassThroughSeconds?: number;
+  physicsMode?: 'automatic' | 'manual';
+  physicsColliders?: Array<{
+    id: string;
+    center: [number, number, number];
+    size: [number, number, number];
+  }>;
   identifiers?: ObjectIdentifier[]; // Identificadores de ponto (anchors) no objeto/avatar
   position: [number, number, number];
   rotation: [number, number, number];
@@ -126,6 +134,7 @@ export interface InventoryItem {
   thumbUrl: string;
   thumbnailUrl?: string;
   type: 'Sala' | 'Avatar' | 'Item' | 'Acessorio' | 'Movel' | 'Pose' | 'Audio' | 'sala' | 'avatar' | 'item' | 'acessorio' | 'cenario' | 'movel' | 'objeto' | 'pose' | 'audio';
+  physicsEnabled?: boolean;
   createdAt?: string;
   isScenario?: boolean;
   isAccessory?: boolean;
@@ -171,6 +180,7 @@ export interface RoomEditorState {
   purchasedFromStoreItemId?: string;
   sceneAssetId: string | null;
   sceneAssetBlobUrl?: string;
+  scenePhysicsEnabled?: boolean;
   placedObjects: PlacedObject[];
   spots: SpotItem[];
   boundary: PlayableBoundary;
