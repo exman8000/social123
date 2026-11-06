@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -631,6 +631,8 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
   const [previewDirty, setPreviewDirty] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const configVersionRef = useRef(0);
+  const autoPreviewTimerRef = useRef<number | null>(null);
 
   const hasFiles = Boolean(rigFile && targetFile);
   const anchorSummary = useMemo(
@@ -651,7 +653,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
     setError('');
     setSuccess('');
     setPreviewUrl('');
-    setPreviewDirty(true);
+    markPreviewDirty();
     setAnchors([]);
     try {
       const gltf = await parseModelFile(file);
@@ -668,9 +670,11 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
       setBoneNames(names);
       setSelectedBone('0');
       setRigFile(file);
+      markPreviewDirty();
       disposeScene(gltf.scene);
     } catch (caught) {
       setRigFile(null);
+      markPreviewDirty();
       setBoneNames([]);
       setSelectedBone('');
       setError(caught instanceof Error ? caught.message : 'Não foi possível ler o modelo rigado.');
@@ -682,13 +686,19 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
     setError('');
     setSuccess('');
     setPreviewUrl('');
-    setPreviewDirty(true);
+    markPreviewDirty();
     setAnchors([]);
     setTargetFile(file);
   };
 
-  const generatePreview = async () => {
+  const markPreviewDirty = () => {
+    configVersionRef.current += 1;
+    setPreviewDirty(true);
+  };
+
+  const generatePreview = useCallback(async () => {
     if (!rigFile || !targetFile || busy) return;
+    const versionAtStart = configVersionRef.current;
     setBusy(true);
     setError('');
     setSuccess('');
@@ -718,7 +728,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
         if (current) URL.revokeObjectURL(current);
         return nextUrl;
       });
-      setPreviewDirty(false);
+      setPreviewDirty(configVersionRef.current !== versionAtStart);
     } catch (caught) {
       console.error('Falha ao gerar prévia de transferência de bones:', caught);
       setError(caught instanceof Error ? caught.message : 'Não foi possível gerar a prévia.');
@@ -726,7 +736,21 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
       cleanupModel?.();
       setBusy(false);
     }
-  };
+  }, [anchors, busy, manualRadius, offsets, orientationY, rigFile, scaleAdjustment, targetFile]);
+
+  useEffect(() => {
+    if (!hasFiles || !previewDirty || busy) return;
+    autoPreviewTimerRef.current = window.setTimeout(() => {
+      autoPreviewTimerRef.current = null;
+      void generatePreview();
+    }, 450);
+    return () => {
+      if (autoPreviewTimerRef.current !== null) {
+        window.clearTimeout(autoPreviewTimerRef.current);
+        autoPreviewTimerRef.current = null;
+      }
+    };
+  }, [busy, generatePreview, hasFiles, previewDirty]);
 
   const saveRiggedModel = async () => {
     if (!rigFile || !targetFile || !previewUrl || previewDirty || busy) return;
@@ -810,7 +834,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
       ...current,
       { id: crypto.randomUUID(), bone: selectedBone, point },
     ]);
-    setPreviewDirty(true);
+    markPreviewDirty();
   };
 
   const updateOffset = (axis: 0 | 1 | 2, value: number) => {
@@ -819,7 +843,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
       next[axis] = value;
       return next;
     });
-    setPreviewDirty(true);
+    markPreviewDirty();
   };
 
   const uploadCard = (
@@ -897,7 +921,9 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
                   />
                   {previewDirty && (
                     <div className="absolute left-2 right-2 top-2 rounded-md border border-amber-300/40 bg-black/75 px-2 py-1 text-[10px] text-amber-100">
-                      Prévia anterior — parâmetros alterados. Gere novamente para conferir.
+                      {busy
+                        ? 'Calculando os ajustes — mantendo a prévia anterior visível.'
+                        : 'Ajustes em rascunho — a prévia será atualizada automaticamente.'}
                     </div>
                   )}
                   <div className="absolute bottom-2 left-2 flex items-center gap-3 rounded-md bg-black/70 px-2 py-1 text-[9px] text-zinc-200">
@@ -926,7 +952,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
               </>
             ) : (
               <div className="flex h-72 items-center justify-center rounded-xl border border-white/10 bg-[#101116] px-8 text-center text-xs text-zinc-500">
-                Gere uma prévia para conferir o modelo e, se necessário, adicionar pontos manuais.
+                Depois de selecionar os dois arquivos, a prévia será gerada automaticamente.
               </div>
             )}
 
@@ -952,7 +978,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
                   value={scaleAdjustment}
                   onChange={(event) => {
                     setScaleAdjustment(Number(event.target.value));
-                    setPreviewDirty(true);
+                    markPreviewDirty();
                   }}
                   className="mt-2 block w-full accent-cyan-300"
                 />
@@ -983,7 +1009,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
                   value={orientationY}
                   onChange={(event) => {
                     setOrientationY(Number(event.target.value));
-                    setPreviewDirty(true);
+                    markPreviewDirty();
                   }}
                   className="mt-1 block w-full accent-cyan-300"
                 />
@@ -1017,7 +1043,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
                   value={manualRadius}
                   onChange={(event) => {
                     setManualRadius(Number(event.target.value));
-                    setPreviewDirty(true);
+                    markPreviewDirty();
                   }}
                   className="mt-1 block w-full accent-violet-300"
                 />
@@ -1037,7 +1063,7 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
                       type="button"
                       onClick={() => {
                         setAnchors((current) => current.filter((item) => item.id !== anchor.id));
-                        setPreviewDirty(true);
+                        markPreviewDirty();
                       }}
                       className="px-1 text-red-300"
                       aria-label="Remover ponto manual"
@@ -1062,7 +1088,8 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
             {success && <div className="text-xs text-emerald-300">{success}</div>}
             {previewUrl && previewDirty && (
               <p className="text-[10px] text-amber-200">
-                Há ajustes manuais pendentes; gere a prévia novamente antes de salvar.
+                Os ajustes são rascunho. A prévia atualiza automaticamente; salvar só fica disponível
+                quando ela refletir os parâmetros atuais.
               </p>
             )}
             {busy && (
@@ -1079,12 +1106,18 @@ export const TransferBonesModal: React.FC<TransferBonesModalProps> = ({ onClose,
             <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
-                onClick={() => void generatePreview()}
+                onClick={() => {
+                  if (autoPreviewTimerRef.current !== null) {
+                    window.clearTimeout(autoPreviewTimerRef.current);
+                    autoPreviewTimerRef.current = null;
+                  }
+                  void generatePreview();
+                }}
                 disabled={!hasFiles || busy}
                 className="flex items-center gap-2 rounded-lg border border-cyan-300/40 px-3 py-2 text-xs font-semibold text-cyan-100 disabled:opacity-40"
               >
                 {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
-                Gerar prévia
+                {busy ? 'Atualizando...' : previewUrl ? 'Atualizar agora' : 'Gerar agora'}
               </button>
               <button
                 type="button"

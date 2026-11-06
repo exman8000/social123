@@ -2512,7 +2512,7 @@ export const UserCustomizationView: React.FC<UserCustomizationViewProps> = ({
                   </h2>
                 </div>
                 <span className="text-[10px] text-zinc-400 font-mono">
-                  {poses.length} poses disponíveis
+                  {poses.length} poses
                 </span>
               </div>
 
